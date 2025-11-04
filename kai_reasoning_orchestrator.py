@@ -1,0 +1,966 @@
+# kai_reasoning_orchestrator.py
+"""
+Reasoning Orchestrator für KAI - Hybrid Reasoning System
+
+Koordiniert mehrere Reasoning Engines und kombiniert deren Ergebnisse
+für robustere, uncertainty-aware Antworten.
+
+Features:
+- Hybrid Reasoning (Logic + Probabilistic + Graph + Abductive)
+- Weighted Confidence Fusion
+- Unified Proof Tree Generation
+- Fallback-Strategien
+- Result Aggregation
+
+Architecture:
+    1. Fast Path: Direct fact lookup
+    2. Deterministic Reasoning: Logic Engine + Graph Traversal
+    3. Probabilistic Enhancement: Uncertainty quantification
+    4. Abductive Fallback: Hypothesis generation
+"""
+
+import logging
+from typing import Any, Dict, List, Optional
+from dataclasses import dataclass, field
+from datetime import datetime
+from enum import Enum
+
+from component_9_logik_engine import Engine, Goal, ProofStep as LogicProofStep
+from component_1_netzwerk import KonzeptNetzwerk
+
+# Import Unified Proof Explanation System
+try:
+    from component_17_proof_explanation import (
+        ProofTree,
+        ProofStep as UnifiedProofStep,
+        StepType,
+        create_proof_tree_from_logic_engine,
+        merge_proof_trees,
+    )
+
+    PROOF_SYSTEM_AVAILABLE = True
+except ImportError:
+    PROOF_SYSTEM_AVAILABLE = False
+
+logger = logging.getLogger(__name__)
+
+
+class ReasoningStrategy(Enum):
+    """Available reasoning strategies"""
+
+    DIRECT_FACT = "direct_fact"
+    LOGIC_ENGINE = "logic_engine"
+    GRAPH_TRAVERSAL = "graph_traversal"
+    PROBABILISTIC = "probabilistic"
+    ABDUCTIVE = "abductive"
+    COMBINATORIAL = "combinatorial"  # New: strategic/combinatorial reasoning
+
+
+@dataclass
+class ReasoningResult:
+    """
+    Result from a single reasoning strategy.
+
+    Attributes:
+        strategy: Which strategy was used
+        success: Whether reasoning succeeded
+        confidence: Confidence score (0.0-1.0)
+        inferred_facts: Dictionary of inferred facts
+        proof_tree: Unified ProofTree (optional)
+        proof_trace: Text explanation
+        metadata: Additional strategy-specific data
+        is_hypothesis: Whether result is abductive hypothesis
+    """
+
+    strategy: ReasoningStrategy
+    success: bool
+    confidence: float
+    inferred_facts: Dict[str, List[str]] = field(default_factory=dict)
+    proof_tree: Optional[ProofTree] = None
+    proof_trace: str = ""
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    is_hypothesis: bool = False
+    timestamp: datetime = field(default_factory=datetime.now)
+
+
+@dataclass
+class AggregatedResult:
+    """
+    Aggregated result from multiple reasoning strategies.
+
+    Combines evidence from multiple sources using weighted fusion.
+    """
+
+    combined_confidence: float
+    inferred_facts: Dict[str, List[str]]
+    merged_proof_tree: Optional[ProofTree]
+    strategies_used: List[ReasoningStrategy]
+    individual_results: List[ReasoningResult]
+    explanation: str
+    is_hypothesis: bool = False
+
+
+class ReasoningOrchestrator:
+    """
+    Main orchestrator for hybrid reasoning.
+
+    Coordinates multiple reasoning engines and aggregates results
+    using weighted confidence fusion.
+    """
+
+    def __init__(
+        self,
+        netzwerk: KonzeptNetzwerk,
+        logic_engine: Engine,
+        graph_traversal,
+        working_memory,
+        signals,
+        probabilistic_engine=None,
+        abductive_engine=None,
+        combinatorial_reasoner=None,
+        config_path: Optional[str] = None,
+    ):
+        """
+        Initialize Reasoning Orchestrator.
+
+        Args:
+            netzwerk: KonzeptNetzwerk instance
+            logic_engine: Logic Engine instance
+            graph_traversal: GraphTraversal instance
+            working_memory: WorkingMemory instance
+            signals: KaiSignals for UI updates
+            probabilistic_engine: ProbabilisticEngine (optional)
+            abductive_engine: AbductiveEngine (optional)
+            combinatorial_reasoner: CombinatorialReasoner (optional)
+            config_path: Path to YAML configuration file (optional)
+        """
+        self.netzwerk = netzwerk
+        self.logic_engine = logic_engine
+        self.graph_traversal = graph_traversal
+        self.working_memory = working_memory
+        self.signals = signals
+        self.probabilistic_engine = probabilistic_engine
+        self.abductive_engine = abductive_engine
+        self.combinatorial_reasoner = combinatorial_reasoner
+
+        # Default Configuration
+        self.enable_hybrid = True  # Combine Logic + Probabilistic
+        self.min_confidence_threshold = 0.4  # Below this: try next strategy
+        self.probabilistic_enhancement = (
+            True  # Enhance deterministic with probabilistic
+        )
+        self.aggregation_method = (
+            "noisy_or"  # noisy_or | weighted_avg | max | dempster_shafer
+        )
+        self.enable_parallel_execution = False  # Parallel strategy execution
+        self.enable_result_caching = True  # Cache results for repeated queries
+
+        # Strategy weights for weighted_avg aggregation
+        self.strategy_weights = {
+            ReasoningStrategy.DIRECT_FACT: 0.40,
+            ReasoningStrategy.LOGIC_ENGINE: 0.25,
+            ReasoningStrategy.GRAPH_TRAVERSAL: 0.15,
+            ReasoningStrategy.COMBINATORIAL: 0.10,
+            ReasoningStrategy.PROBABILISTIC: 0.08,
+            ReasoningStrategy.ABDUCTIVE: 0.02,
+        }
+
+        # Load configuration from YAML if provided
+        if config_path:
+            self._load_config(config_path)
+
+        # Result cache (LRU)
+        from cachetools import LRUCache
+
+        self._result_cache = (
+            LRUCache(maxsize=100) if self.enable_result_caching else None
+        )
+
+        logger.info(
+            f"ReasoningOrchestrator initialisiert: "
+            f"aggregation={self.aggregation_method}, "
+            f"parallel={self.enable_parallel_execution}, "
+            f"caching={self.enable_result_caching}"
+        )
+
+    def query_with_hybrid_reasoning(
+        self,
+        topic: str,
+        relation_type: str = "IS_A",
+        strategies: Optional[List[ReasoningStrategy]] = None,
+    ) -> Optional[AggregatedResult]:
+        """
+        Main entry point for hybrid reasoning.
+
+        Tries multiple strategies and aggregates results:
+        1. Fast Path (direct facts)
+        2. Deterministic (Logic + Graph)
+        3. Probabilistic Enhancement
+        4. Abductive Fallback
+
+        Args:
+            topic: The topic to reason about
+            relation_type: Type of relation to find
+            strategies: Which strategies to use (None = all)
+
+        Returns:
+            AggregatedResult with combined evidence or None
+        """
+        logger.info(f"[Hybrid Reasoning] Query: {topic} ({relation_type})")
+
+        # Check cache first
+        cache_key = f"{topic}:{relation_type}:{str(strategies)}"
+        if self._result_cache is not None and cache_key in self._result_cache:
+            logger.debug(f"[Cache Hit] Returning cached result for {topic}")
+            return self._result_cache[cache_key]
+
+        if strategies is None:
+            strategies = [
+                ReasoningStrategy.DIRECT_FACT,
+                ReasoningStrategy.GRAPH_TRAVERSAL,
+                ReasoningStrategy.LOGIC_ENGINE,
+                ReasoningStrategy.PROBABILISTIC,
+                ReasoningStrategy.ABDUCTIVE,
+            ]
+
+        results = []
+
+        # Stage 1: Direct Fact Lookup (Fast Path)
+        if ReasoningStrategy.DIRECT_FACT in strategies:
+            direct_result = self._try_direct_fact_lookup(topic, relation_type)
+            if direct_result and direct_result.success:
+                if direct_result.confidence >= 0.95:
+                    # High confidence direct fact - return immediately
+                    logger.info(
+                        "[Hybrid Reasoning] [OK] High-confidence direct fact found"
+                    )
+                    aggregated = self._create_aggregated_result([direct_result])
+                    # Cache early exit result
+                    if self._result_cache is not None:
+                        self._result_cache[cache_key] = aggregated
+                    return aggregated
+                results.append(direct_result)
+
+        # Stage 2: Deterministic Reasoning (Graph + Logic)
+        deterministic_results = []
+
+        if (
+            self.enable_parallel_execution
+            and len(
+                [
+                    s
+                    for s in strategies
+                    if s
+                    in [
+                        ReasoningStrategy.GRAPH_TRAVERSAL,
+                        ReasoningStrategy.LOGIC_ENGINE,
+                    ]
+                ]
+            )
+            > 1
+        ):
+            # Parallel execution of independent strategies
+            logger.debug("[Parallel Execution] Running Graph + Logic in parallel")
+
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            futures = {}
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                if ReasoningStrategy.GRAPH_TRAVERSAL in strategies:
+                    futures[
+                        executor.submit(self._try_graph_traversal, topic, relation_type)
+                    ] = "graph"
+                if ReasoningStrategy.LOGIC_ENGINE in strategies:
+                    futures[
+                        executor.submit(self._try_logic_engine, topic, relation_type)
+                    ] = "logic"
+
+                for future in as_completed(futures):
+                    strategy_name = futures[future]
+                    try:
+                        result = future.result()
+                        if result and result.success:
+                            deterministic_results.append(result)
+                            logger.debug(
+                                f"[Parallel Execution] {strategy_name} completed successfully"
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            f"[Parallel Execution] {strategy_name} failed: {e}"
+                        )
+        else:
+            # Sequential execution (default)
+            if ReasoningStrategy.GRAPH_TRAVERSAL in strategies:
+                graph_result = self._try_graph_traversal(topic, relation_type)
+                if graph_result and graph_result.success:
+                    deterministic_results.append(graph_result)
+
+            if ReasoningStrategy.LOGIC_ENGINE in strategies:
+                logic_result = self._try_logic_engine(topic, relation_type)
+                if logic_result and logic_result.success:
+                    deterministic_results.append(logic_result)
+
+        results.extend(deterministic_results)
+
+        # Stage 3: Probabilistic Enhancement
+        if (
+            ReasoningStrategy.PROBABILISTIC in strategies
+            and self.probabilistic_enhancement
+        ):
+            if deterministic_results:
+                # Enhance deterministic results with probabilistic reasoning
+                prob_result = self._enhance_with_probabilistic(
+                    topic, relation_type, deterministic_results
+                )
+                if prob_result and prob_result.success:
+                    results.append(prob_result)
+            else:
+                # Try standalone probabilistic reasoning
+                prob_result = self._try_probabilistic(topic, relation_type)
+                if prob_result and prob_result.success:
+                    results.append(prob_result)
+
+        # Check if we have sufficient results
+        if results:
+            aggregated = self._create_aggregated_result(results)
+            if aggregated.combined_confidence >= self.min_confidence_threshold:
+                logger.info(
+                    f"[Hybrid Reasoning] [OK] Success with {len(results)} strategies "
+                    f"(confidence: {aggregated.combined_confidence:.2f})"
+                )
+                # Cache result
+                if self._result_cache is not None:
+                    self._result_cache[cache_key] = aggregated
+                return aggregated
+
+        # Stage 4: Abductive Fallback (Hypothesis Generation)
+        if ReasoningStrategy.ABDUCTIVE in strategies and self.abductive_engine:
+            logger.info("[Hybrid Reasoning] Falling back to Abductive Reasoning")
+            abd_result = self._try_abductive(topic, relation_type)
+            if abd_result and abd_result.success:
+                results.append(abd_result)
+                aggregated = self._create_aggregated_result(results)
+                # Cache result
+                if self._result_cache is not None:
+                    self._result_cache[cache_key] = aggregated
+                return aggregated
+
+        # No successful reasoning
+        if results:
+            # Return partial results
+            aggregated = self._create_aggregated_result(results)
+            # Cache partial results too
+            if self._result_cache is not None:
+                self._result_cache[cache_key] = aggregated
+            return aggregated
+
+        logger.info("[Hybrid Reasoning] [X] No strategy succeeded")
+        return None
+
+    def _try_direct_fact_lookup(
+        self, topic: str, relation_type: str
+    ) -> Optional[ReasoningResult]:
+        """
+        Fast path: Direct fact lookup in knowledge graph.
+        """
+        logger.debug(f"[Direct Fact] Querying: {topic}")
+
+        try:
+            facts = self.netzwerk.query_graph_for_facts(topic)
+
+            if relation_type in facts and facts[relation_type]:
+                # Found direct facts
+                inferred_facts = {relation_type: facts[relation_type]}
+
+                # Create simple proof tree
+                proof_tree = None
+                if PROOF_SYSTEM_AVAILABLE:
+                    proof_tree = ProofTree(query=f"Was ist ein {topic}?")
+
+                    for obj in facts[relation_type][:3]:  # Limit to 3
+                        step = UnifiedProofStep(
+                            step_id=f"direct_{topic}_{obj}",
+                            step_type=StepType.FACT_MATCH,
+                            inputs=[topic],
+                            output=f"{topic} {relation_type} {obj}",
+                            confidence=1.0,
+                            explanation_text=f"Direkter Fakt in Wissensbasis: {topic} -> {obj}",
+                            source_component="direct_fact_lookup",
+                        )
+                        proof_tree.add_root_step(step)
+
+                return ReasoningResult(
+                    strategy=ReasoningStrategy.DIRECT_FACT,
+                    success=True,
+                    confidence=1.0,
+                    inferred_facts=inferred_facts,
+                    proof_tree=proof_tree,
+                    proof_trace=f"Direkte Fakten gefunden: {len(facts[relation_type])} Einträge",
+                    metadata={"num_facts": len(facts[relation_type])},
+                )
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Direct Fact] Fehler: {e}")
+            return None
+
+    def _try_graph_traversal(
+        self, topic: str, relation_type: str
+    ) -> Optional[ReasoningResult]:
+        """
+        Graph-based multi-hop reasoning.
+        """
+        logger.debug(f"[Graph Traversal] Topic: {topic}")
+
+        try:
+            paths = self.graph_traversal.find_transitive_relations(
+                topic, relation_type, max_depth=5
+            )
+
+            if paths:
+                # Extract inferred facts
+                inferred_facts = {relation_type: []}
+                for path in paths:
+                    target = path.nodes[-1]
+                    if target not in inferred_facts[relation_type]:
+                        inferred_facts[relation_type].append(target)
+
+                # Create proof tree
+                proof_tree = None
+                if PROOF_SYSTEM_AVAILABLE:
+                    proof_tree = ProofTree(query=f"Was ist ein {topic}?")
+                    for path in paths[:5]:
+                        proof_step = self.graph_traversal.create_proof_step_from_path(
+                            path, query=f"{topic} {relation_type}"
+                        )
+                        if proof_step:
+                            proof_tree.add_root_step(proof_step)
+
+                # Best path confidence
+                best_confidence = paths[0].confidence if paths else 0.0
+
+                # Track in working memory
+                self.working_memory.add_reasoning_state(
+                    step_type="graph_traversal_orchestrator",
+                    description=f"Graph-Traversal für '{topic}' via Orchestrator",
+                    data={
+                        "num_paths": len(paths),
+                        "inferred_facts": inferred_facts,
+                        "relation_type": relation_type,
+                    },
+                    confidence=best_confidence,
+                )
+
+                return ReasoningResult(
+                    strategy=ReasoningStrategy.GRAPH_TRAVERSAL,
+                    success=True,
+                    confidence=best_confidence,
+                    inferred_facts=inferred_facts,
+                    proof_tree=proof_tree,
+                    proof_trace=f"Graph-Traversal: {len(paths)} Pfade gefunden",
+                    metadata={
+                        "num_paths": len(paths),
+                        "avg_hops": sum(len(p.relations) for p in paths) / len(paths),
+                    },
+                )
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Graph Traversal] Fehler: {e}")
+            return None
+
+    def _try_logic_engine(
+        self, topic: str, relation_type: str
+    ) -> Optional[ReasoningResult]:
+        """
+        Rule-based backward chaining.
+        """
+        logger.debug(f"[Logic Engine] Topic: {topic}")
+
+        try:
+            # Create goal
+            goal = Goal(
+                pred=relation_type, args={"subject": topic.lower(), "object": None}
+            )
+
+            # Load facts
+            all_facts = self._load_facts_from_graph(topic)
+            for fact in all_facts:
+                self.logic_engine.add_fact(fact)
+
+            # Run with tracking
+            query_text = f"Was ist ein {topic}?"
+            proof = self.logic_engine.run_with_tracking(
+                goal=goal,
+                inference_type="backward_chaining",
+                query=query_text,
+                max_depth=5,
+            )
+
+            if proof:
+                # Extract facts
+                inferred_facts = self._extract_facts_from_proof(proof)
+
+                # Create proof tree
+                proof_tree = None
+                if PROOF_SYSTEM_AVAILABLE:
+                    proof_tree = create_proof_tree_from_logic_engine(
+                        proof, query=query_text
+                    )
+
+                return ReasoningResult(
+                    strategy=ReasoningStrategy.LOGIC_ENGINE,
+                    success=True,
+                    confidence=proof.confidence,
+                    inferred_facts=inferred_facts,
+                    proof_tree=proof_tree,
+                    proof_trace=self.logic_engine.format_proof_trace(proof),
+                    metadata={"method": proof.method, "depth": proof.goal.depth},
+                )
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Logic Engine] Fehler: {e}")
+            return None
+
+    def _try_probabilistic(
+        self, topic: str, relation_type: str
+    ) -> Optional[ReasoningResult]:
+        """
+        Standalone probabilistic reasoning.
+        """
+        if not self.probabilistic_engine:
+            return None
+
+        logger.debug(f"[Probabilistic] Topic: {topic}")
+
+        try:
+            # Query probabilistic engine
+            goal_sig = f"{relation_type}(subject={topic.lower()},object=?)"
+            prob, conf = self.probabilistic_engine.query(goal_sig)
+
+            if prob > 0.3:  # Minimum threshold
+                # Create result
+                explanation = self.probabilistic_engine.generate_response(
+                    goal_sig, threshold_high=0.8, threshold_low=0.2
+                )
+
+                return ReasoningResult(
+                    strategy=ReasoningStrategy.PROBABILISTIC,
+                    success=True,
+                    confidence=prob,
+                    inferred_facts={},  # Probabilistic gibt keine konkreten Fakten
+                    proof_tree=None,
+                    proof_trace=explanation,
+                    metadata={"probability": prob, "confidence": conf},
+                )
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Probabilistic] Fehler: {e}")
+            return None
+
+    def _enhance_with_probabilistic(
+        self,
+        topic: str,
+        relation_type: str,
+        deterministic_results: List[ReasoningResult],
+    ) -> Optional[ReasoningResult]:
+        """
+        Enhance deterministic results with probabilistic uncertainty quantification.
+        """
+        if not self.probabilistic_engine:
+            return None
+
+        logger.debug(
+            f"[Probabilistic Enhancement] Enhancing {len(deterministic_results)} results"
+        )
+
+        try:
+            # Add deterministic facts to probabilistic engine
+            from component_16_probabilistic_engine import ProbabilisticFact
+
+            for result in deterministic_results:
+                for rel_type, objects in result.inferred_facts.items():
+                    for obj in objects:
+                        fact = ProbabilisticFact(
+                            pred=rel_type,
+                            args={"subject": topic.lower(), "object": obj.lower()},
+                            probability=result.confidence,
+                            source=f"deterministic_{result.strategy.value}",
+                        )
+                        self.probabilistic_engine.add_fact(fact)
+
+            # Run probabilistic inference
+            derived_facts = self.probabilistic_engine.infer(max_iterations=3)
+
+            if derived_facts:
+                # Calculate enhanced confidence
+                goal_sig = f"{relation_type}(subject={topic.lower()},object=?)"
+                enhanced_prob, enhanced_conf = self.probabilistic_engine.query(goal_sig)
+
+                return ReasoningResult(
+                    strategy=ReasoningStrategy.PROBABILISTIC,
+                    success=True,
+                    confidence=enhanced_conf,
+                    inferred_facts={},
+                    proof_tree=None,
+                    proof_trace=f"Probabilistische Verbesserung: P={enhanced_prob:.2f}, Conf={enhanced_conf:.2f}",
+                    metadata={
+                        "enhanced": True,
+                        "base_results": len(deterministic_results),
+                        "derived_facts": len(derived_facts),
+                    },
+                )
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Probabilistic Enhancement] Fehler: {e}")
+            return None
+
+    def _try_abductive(
+        self, topic: str, relation_type: str
+    ) -> Optional[ReasoningResult]:
+        """
+        Abductive hypothesis generation.
+        """
+        if not self.abductive_engine:
+            return None
+
+        logger.debug(f"[Abductive] Topic: {topic}")
+
+        try:
+            # Load context facts
+            all_facts = self._load_facts_from_graph(topic)
+
+            # Generate hypotheses
+            observation = f"Es wurde nach '{topic}' gefragt"
+            hypotheses = self.abductive_engine.generate_hypotheses(
+                observation=observation,
+                context_facts=all_facts,
+                strategies=["template", "analogy", "causal_chain"],
+                max_hypotheses=5,
+            )
+
+            if hypotheses:
+                best_hypothesis = hypotheses[0]
+
+                # Extract inferred facts
+                inferred_facts = {}
+                for fact in best_hypothesis.abduced_facts:
+                    rel = fact.pred
+                    obj = fact.args.get("object", "")
+                    if rel not in inferred_facts:
+                        inferred_facts[rel] = []
+                    if obj and obj not in inferred_facts[rel]:
+                        inferred_facts[rel].append(obj)
+
+                # Create proof tree
+                proof_tree = None
+                if PROOF_SYSTEM_AVAILABLE:
+                    proof_tree = ProofTree(query=observation)
+                    hypothesis_steps = (
+                        self.abductive_engine.create_multi_hypothesis_proof_chain(
+                            hypotheses[:3], query=observation
+                        )
+                    )
+                    for step in hypothesis_steps:
+                        proof_tree.add_root_step(step)
+
+                return ReasoningResult(
+                    strategy=ReasoningStrategy.ABDUCTIVE,
+                    success=True,
+                    confidence=best_hypothesis.confidence,
+                    inferred_facts=inferred_facts,
+                    proof_tree=proof_tree,
+                    proof_trace=best_hypothesis.explanation,
+                    metadata={
+                        "strategy": best_hypothesis.strategy,
+                        "num_hypotheses": len(hypotheses),
+                        "scores": best_hypothesis.scores,
+                    },
+                    is_hypothesis=True,
+                )
+
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Abductive] Fehler: {e}")
+            return None
+
+    def _create_aggregated_result(
+        self, results: List[ReasoningResult]
+    ) -> AggregatedResult:
+        """
+        Aggregate multiple reasoning results using configured aggregation method.
+
+        Supports: noisy_or, weighted_avg, max, dempster_shafer
+        """
+        if not results:
+            raise ValueError("Cannot aggregate empty results")
+
+        logger.debug(
+            f"[Aggregation] Combining {len(results)} results using {self.aggregation_method}"
+        )
+
+        # Combine confidences using selected method
+        if self.aggregation_method == "noisy_or":
+            confidences = [r.confidence for r in results]
+            combined_confidence = self._noisy_or(confidences)
+        elif self.aggregation_method == "weighted_avg":
+            combined_confidence = self._weighted_average(results)
+        elif self.aggregation_method == "max":
+            confidences = [r.confidence for r in results]
+            combined_confidence = self._maximum(confidences)
+        elif self.aggregation_method == "dempster_shafer":
+            combined_confidence = self._dempster_shafer(results)
+        else:
+            logger.warning(
+                f"Unknown aggregation method: {self.aggregation_method}, falling back to noisy_or"
+            )
+            confidences = [r.confidence for r in results]
+            combined_confidence = self._noisy_or(confidences)
+
+        # Merge inferred facts (union)
+        merged_facts = {}
+        for result in results:
+            for rel_type, objects in result.inferred_facts.items():
+                if rel_type not in merged_facts:
+                    merged_facts[rel_type] = []
+                for obj in objects:
+                    if obj not in merged_facts[rel_type]:
+                        merged_facts[rel_type].append(obj)
+
+        # Merge proof trees
+        merged_proof_tree = None
+        if PROOF_SYSTEM_AVAILABLE:
+            proof_trees = [r.proof_tree for r in results if r.proof_tree]
+            if proof_trees:
+                query = proof_trees[0].query
+                merged_proof_tree = merge_proof_trees(proof_trees, query)
+
+        # Emit merged proof tree
+        if merged_proof_tree and self.signals:
+            self.signals.proof_tree_update.emit(merged_proof_tree)
+
+        # Generate explanation
+        strategies_used = [r.strategy for r in results]
+        strategy_names = ", ".join(s.value for s in strategies_used)
+
+        explanation = (
+            f"Kombiniertes Ergebnis aus {len(results)} Strategien ({strategy_names}). "
+            f"Kombinierte Konfidenz: {combined_confidence:.2f}"
+        )
+
+        # Check if any result is hypothesis
+        is_hypothesis = any(r.is_hypothesis for r in results)
+
+        return AggregatedResult(
+            combined_confidence=combined_confidence,
+            inferred_facts=merged_facts,
+            merged_proof_tree=merged_proof_tree,
+            strategies_used=strategies_used,
+            individual_results=results,
+            explanation=explanation,
+            is_hypothesis=is_hypothesis,
+        )
+
+    def _load_config(self, config_path: str):
+        """
+        Load configuration from YAML file.
+
+        Args:
+            config_path: Path to YAML config file
+        """
+        try:
+            import yaml
+            from pathlib import Path
+
+            config_file = Path(config_path)
+            if not config_file.exists():
+                logger.warning(f"Config file not found: {config_path}, using defaults")
+                return
+
+            with open(config_file, "r", encoding="utf-8") as f:
+                config = yaml.safe_load(f)
+
+            # Load orchestrator settings
+            if "orchestrator" in config:
+                orch_config = config["orchestrator"]
+                self.enable_hybrid = orch_config.get(
+                    "enable_hybrid", self.enable_hybrid
+                )
+                self.min_confidence_threshold = orch_config.get(
+                    "min_confidence_threshold", self.min_confidence_threshold
+                )
+                self.probabilistic_enhancement = orch_config.get(
+                    "probabilistic_enhancement", self.probabilistic_enhancement
+                )
+                self.aggregation_method = orch_config.get(
+                    "aggregation_method", self.aggregation_method
+                )
+                self.enable_parallel_execution = orch_config.get(
+                    "enable_parallel_execution", self.enable_parallel_execution
+                )
+                self.enable_result_caching = orch_config.get(
+                    "enable_result_caching", self.enable_result_caching
+                )
+
+            # Load strategy weights
+            if "strategy_weights" in config:
+                for strategy_name, weight in config["strategy_weights"].items():
+                    try:
+                        strategy = ReasoningStrategy(strategy_name)
+                        self.strategy_weights[strategy] = weight
+                    except ValueError:
+                        logger.warning(f"Unknown strategy in config: {strategy_name}")
+
+            logger.info(f"[OK] Configuration loaded from {config_path}")
+
+        except ImportError:
+            logger.warning(
+                "PyYAML not installed, cannot load config. Install: pip install pyyaml"
+            )
+        except Exception as e:
+            logger.error(f"Failed to load config from {config_path}: {e}")
+
+    def _noisy_or(self, probabilities: List[float]) -> float:
+        """
+        Noisy-OR combination for redundant evidence.
+
+        P(E | C1, C2, ..., Cn) = 1 - ∏(1 - P(E | Ci))
+
+        At least one source is sufficient.
+        """
+        if not probabilities:
+            return 0.0
+
+        product = 1.0
+        for p in probabilities:
+            product *= 1.0 - p
+
+        return 1.0 - product
+
+    def _weighted_average(self, results: List[ReasoningResult]) -> float:
+        """
+        Weighted average combination.
+
+        Combined = Σ(wi * Pi) / Σ(wi)
+
+        Uses strategy_weights for weighting.
+        """
+        if not results:
+            return 0.0
+
+        weighted_sum = 0.0
+        total_weight = 0.0
+
+        for result in results:
+            weight = self.strategy_weights.get(result.strategy, 0.1)
+            weighted_sum += weight * result.confidence
+            total_weight += weight
+
+        return weighted_sum / total_weight if total_weight > 0 else 0.0
+
+    def _maximum(self, probabilities: List[float]) -> float:
+        """
+        Maximum confidence (best-case scenario).
+
+        Combined = max(P1, P2, ..., Pn)
+
+        Takes the most confident source.
+        """
+        return max(probabilities) if probabilities else 0.0
+
+    def _dempster_shafer(self, results: List[ReasoningResult]) -> float:
+        """
+        Dempster-Shafer combination for uncertain evidence.
+
+        Combines belief masses from multiple sources accounting for conflict.
+
+        Simplified implementation:
+        m1 ⊕ m2 = (m1 * m2) / (1 - K)
+        where K = conflict mass
+        """
+        if not results:
+            return 0.0
+
+        if len(results) == 1:
+            return results[0].confidence
+
+        # Initialize with first result
+        combined_belief = results[0].confidence
+        combined_disbelief = 1.0 - results[0].confidence
+
+        # Combine with subsequent results
+        for result in results[1:]:
+            belief = result.confidence
+            disbelief = 1.0 - result.confidence
+
+            # Calculate conflict
+            conflict = combined_belief * disbelief + combined_disbelief * belief
+
+            if conflict >= 1.0:
+                # Total conflict - fall back to noisy-or
+                logger.warning(
+                    "Dempster-Shafer: Total conflict detected, falling back to Noisy-OR"
+                )
+                return self._noisy_or([r.confidence for r in results])
+
+            # Combine beliefs
+            new_belief = (combined_belief * belief) / (1.0 - conflict)
+            new_disbelief = (combined_disbelief * disbelief) / (1.0 - conflict)
+
+            combined_belief = new_belief
+            combined_disbelief = new_disbelief
+
+        return combined_belief
+
+    def _load_facts_from_graph(self, topic: str):
+        """Load facts from knowledge graph (helper method)."""
+        from component_9_logik_engine import Fact
+
+        facts = []
+        fact_data = self.netzwerk.query_graph_for_facts(topic)
+
+        for relation_type, objects in fact_data.items():
+            for obj in objects:
+                fact = Fact(
+                    pred=relation_type,
+                    args={"subject": topic.lower(), "object": obj.lower()},
+                    confidence=1.0,
+                    source="graph",
+                )
+                facts.append(fact)
+
+        return facts
+
+    def _extract_facts_from_proof(self, proof: LogicProofStep) -> Dict[str, List[str]]:
+        """Extract facts from Logic Engine proof (helper method)."""
+        facts = {}
+
+        if proof.supporting_facts:
+            for fact in proof.supporting_facts:
+                relation = fact.pred
+                obj = fact.args.get("object", "")
+
+                if relation not in facts:
+                    facts[relation] = []
+
+                if obj and obj not in facts[relation]:
+                    facts[relation].append(obj)
+
+        # Recursive through subgoals
+        for subproof in proof.subgoals:
+            subfacts = self._extract_facts_from_proof(subproof)
+            for relation, objects in subfacts.items():
+                if relation not in facts:
+                    facts[relation] = []
+                facts[relation].extend([o for o in objects if o not in facts[relation]])
+
+        return facts
