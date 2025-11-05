@@ -58,7 +58,7 @@ KAI ist eine deutschsprachige KI, die Sprache wie Menschen lernt: durch Musterer
 ### 1. Repository klonen
 ```bash
 git clone https://github.com/RichardGeh/KAI.git
-cd kai-claude
+cd kai
 ```
 
 ### 2. Dependencies installieren
