@@ -1,0 +1,103 @@
+# Hybrid Reasoning Configuration
+# ==================================
+# Configuration for ReasoningOrchestrator
+#
+# Usage:
+#   orchestrator = ReasoningOrchestrator(..., config_path="config/reasoning_pipelines.yaml")
+
+# Orchestrator Settings
+orchestrator:
+  # Enable/Disable hybrid reasoning
+  enable_hybrid: true
+
+  # Minimum confidence threshold for success (0.0 - 1.0)
+  min_confidence_threshold: 0.4
+
+  # Enable probabilistic enhancement of deterministic results
+  probabilistic_enhancement: true
+
+  # Aggregation method: noisy_or | weighted_avg | max | dempster_shafer
+  # - noisy_or: Best for redundant evidence (at least one source sufficient)
+  # - weighted_avg: Best for balanced combination with strategy preferences
+  # - max: Best for optimistic scenarios (trust the most confident source)
+  # - dempster_shafer: Best for uncertain evidence with conflict resolution
+  aggregation_method: "noisy_or"
+
+  # Enable parallel execution of independent strategies
+  # Improves performance but requires thread-safe components
+  enable_parallel_execution: false
+
+  # Enable result caching (LRU Cache)
+  enable_result_caching: true
+
+# Strategy Weights (for weighted_avg aggregation)
+# Higher weights = more influence in final confidence score
+strategy_weights:
+  direct_fact: 0.40        # Direct graph lookups (highest trust)
+  logic_engine: 0.30       # Rule-based inference
+  graph_traversal: 0.20    # Multi-hop reasoning
+  probabilistic: 0.08      # Uncertainty quantification
+  abductive: 0.02          # Hypothesis generation (lowest trust)
+
+# Pipeline Definitions (Future Feature)
+# Different pipelines for different query types
+pipelines:
+  # Question Answering Pipeline
+  question_answering:
+    description: "Optimized for factual question answering"
+    strategies:
+      - direct_fact
+      - graph_traversal
+      - logic_engine
+      - probabilistic
+    min_confidence: 0.5
+    aggregation: "noisy_or"
+
+  # Learning Pipeline
+  learning:
+    description: "Conservative pipeline for learning new facts"
+    strategies:
+      - direct_fact
+      - logic_engine
+    min_confidence: 0.7
+    aggregation: "weighted_avg"
+
+  # Exploration Pipeline
+  exploration:
+    description: "Exploratory pipeline including hypotheses"
+    strategies:
+      - direct_fact
+      - graph_traversal
+      - logic_engine
+      - probabilistic
+      - abductive
+    min_confidence: 0.3
+    aggregation: "dempster_shafer"
+
+  # Fast Pipeline
+  fast:
+    description: "Fast pipeline for quick lookups"
+    strategies:
+      - direct_fact
+      - graph_traversal
+    min_confidence: 0.6
+    aggregation: "max"
+
+# Performance Settings
+performance:
+  # Cache settings
+  cache_maxsize: 100
+  cache_ttl: 300  # seconds
+
+  # Parallel execution settings
+  max_workers: 2
+  execution_timeout: 10  # seconds per strategy
+
+  # Early exit settings
+  early_exit_confidence: 0.95  # Exit immediately if confidence >= this
+
+# Logging
+logging:
+  level: "INFO"  # DEBUG | INFO | WARNING | ERROR
+  log_aggregation_details: true
+  log_strategy_timing: false

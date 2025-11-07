@@ -1,0 +1,39 @@
+repos:
+  - repo: https://github.com/psf/black
+    rev: 25.9.0
+    hooks:
+      - id: black
+        files: ^(component_|kai_|main_|setup_|tests/).*\.py$
+        language_version: python3.13
+
+  - repo: https://github.com/pycqa/isort
+    rev: 7.0.0
+    hooks:
+      - id: isort
+        files: ^(component_|kai_|main_|setup_|tests/).*\.py$
+        args: ["--profile", "black"]
+
+  - repo: https://github.com/pycqa/flake8
+    rev: 7.3.0
+    hooks:
+      - id: flake8
+        files: ^(component_|kai_|main_|setup_|tests/).*\.py$
+        args: ["--config", ".flake8"]
+
+  - repo: https://github.com/pycqa/autoflake
+    rev: v2.3.1
+    hooks:
+      - id: autoflake
+        files: ^(component_|kai_|main_|setup_|tests/).*\.py$
+        args:
+          - --remove-all-unused-imports
+          - --remove-unused-variables
+          - --in-place
+
+  - repo: https://github.com/PyCQA/bandit
+    rev: 1.8.6
+    hooks:
+      - id: bandit
+        files: ^(component_|kai_|main_|setup_).*\.py$
+        args: ["--configfile", ".bandit", "--severity-level", "medium"]
+        exclude: ^tests/

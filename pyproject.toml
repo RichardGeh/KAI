@@ -1,0 +1,273 @@
+# KAI (Konzeptueller AI Prototyp) - Project Configuration
+# Python 3.13.2+ | Neo4j | spaCy | PySide6
+
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "kai-claude"
+version = "0.0.02"
+description = "Self-learning AI that acquires knowledge autonomously from text with transparent reasoning"
+readme = "README.md"
+requires-python = ">=3.13"
+license = {text = "Apache-2.0"}
+authors = [
+    {name = "Richard Gehlhaar"}
+]
+keywords = [
+    "ai",
+    "nlp",
+    "knowledge-graph",
+    "reasoning",
+    "self-learning",
+    "neo4j",
+    "spacy",
+    "symbolic-ai",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+]
+
+dependencies = [
+    "neo4j>=5.0.0",
+    "spacy>=3.7.0",
+    "PySide6>=6.6.0",
+    "cachetools>=5.3.0",
+    "sentence-transformers>=2.2.0",
+    "pdfplumber>=0.10.0",
+    "python-docx>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    # Testing
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+    "pytest-mock>=3.12.0",
+    "pytest-timeout>=2.2.0",
+    "pytest-xdist>=3.5.0",
+    # Code Quality
+    "black>=25.9.0",
+    "isort>=7.0.0",
+    "flake8>=7.3.0",
+    "mypy>=1.15.0",
+    "autoflake>=2.3.0",
+    "radon>=6.0.0",
+    "bandit>=1.8.0",
+    # Type Stubs
+    "types-cachetools>=6.2.0",
+    # Pre-commit
+    "pre-commit>=3.6.0",
+    # Debugging
+    "ipython>=8.20.0",
+    "ipdb>=0.13.0",
+    "memory-profiler>=0.61.0",
+    "line-profiler>=4.1.0",
+    # Documentation
+    "sphinx>=7.2.0",
+    "sphinx-rtd-theme>=2.0.0",
+    # Development
+    "watchdog>=3.0.0",
+]
+
+# -------------------------------------------------------------------
+# Tool Configurations
+# -------------------------------------------------------------------
+
+[tool.black]
+line-length = 88
+target-version = ['py313']
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+  | \.venv
+  | venv
+  | \.pytest_cache
+  | build
+  | dist
+  | __pycache__
+)/
+'''
+
+[tool.isort]
+profile = "black"
+line_length = 88
+py_version = 313
+known_first_party = ["component_*", "kai_*", "main_*", "setup_*"]
+skip_gitignore = true
+extend_skip_glob = [
+    ".git/*",
+    ".venv/*",
+    "venv/*",
+    ".pytest_cache/*",
+    "build/*",
+    "dist/*",
+    "__pycache__/*",
+]
+
+[tool.flake8]
+# Hinweis: flake8 unterstützt pyproject.toml nicht nativ, daher .flake8 behalten
+# Diese Sektion dient nur als Dokumentation
+
+[tool.mypy]
+python_version = "3.13"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+check_untyped_defs = true
+ignore_missing_imports = true
+exclude = [
+    "tests/",
+    "setup_initial_knowledge.py",
+]
+
+# Progressive strict typing (Modul für Modul)
+[[tool.mypy.overrides]]
+module = [
+    "component_5_linguistik_strukturen",
+    "component_15_logging_config",
+    "component_17_proof_explanation",
+]
+disallow_untyped_defs = true
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = true
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+pythonpath = ["."]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+
+# Markers für Test-Organisation
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+    "integration: marks tests as integration tests",
+    "unit: marks tests as unit tests",
+    "db: marks tests requiring Neo4j database",
+    "embedding: marks tests requiring embedding service",
+    "ui: marks tests requiring UI components",
+]
+
+# Output-Konfiguration
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--showlocals",
+    "--tb=short",
+    # Coverage
+    "--cov=.",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-config=.coveragerc",
+]
+
+# Logging (Windows-Encoding-Fix)
+log_cli = false
+console_output_style = "classic"
+
+# Timeout
+timeout = 300
+timeout_method = "thread"
+
+# Parallel Execution
+# Aktivieren mit: pytest -n auto
+# addopts += ["-n", "auto"]
+
+filterwarnings = [
+    # Ignore specific deprecation warnings
+    "ignore::DeprecationWarning:typing",
+    "ignore::DeprecationWarning:neo4j",
+    "ignore::DeprecationWarning:spacy",
+    "ignore::DeprecationWarning:pydantic",
+]
+
+[tool.coverage.run]
+source = ["."]
+omit = [
+    "tests/*",
+    "demos/*",
+    ".venv/*",
+    "venv/*",
+    "*/__pycache__/*",
+    "setup_initial_knowledge.py",
+    "fix_*.py",
+]
+branch = true
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if TYPE_CHECKING:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "@abstractmethod",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.radon]
+# Cyclomatic Complexity Thresholds
+cc_min = "C"  # Warnung bei Komplexität > 10
+show_complexity = true
+average = true
+order = "SCORE"
+
+# Maintainability Index Thresholds
+mi_min = "B"  # Warnung bei MI < 10
+
+# Excludes
+exclude = ".git,.venv,venv,.pytest_cache,build,dist,__pycache__,tests"
+
+[tool.bandit]
+# Security-Scanning-Konfiguration
+# Hinweis: Bandit nutzt .bandit YAML-Datei (bessere Kontrolle)
+# Diese Sektion dient nur als Dokumentation
+exclude_dirs = [
+    ".git",
+    ".venv",
+    "venv",
+    ".pytest_cache",
+    "build",
+    "dist",
+    "__pycache__",
+    "tests",
+]
+skips = ["B101", "B601"]  # assert_used, paramiko_calls
+
+# -------------------------------------------------------------------
+# Project URLs
+# -------------------------------------------------------------------
+
+[project.urls]
+"Documentation" = "docs/"
+"Source Code" = "https://github.com/RichardGeh/KAI"
+"Bug Tracker" = "https://github.com/RichardGeh/KAI/issues"
+
+# -------------------------------------------------------------------
+# Entry Points (Optional - für CLI-Tools)
+# -------------------------------------------------------------------
+
+[project.scripts]
+kai = "main_ui_graphical:main"
+kai-setup = "setup_initial_knowledge:main"
