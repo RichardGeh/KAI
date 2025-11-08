@@ -16,12 +16,9 @@ def test_imports():
 
         print("✓ ReasoningOrchestrator imported")
 
-
         print("✓ MetaLearningEngine imported")
 
-
         print("✓ SelfEvaluator imported")
-
 
         print("✓ AdaptiveResonanceEngine imported")
 
