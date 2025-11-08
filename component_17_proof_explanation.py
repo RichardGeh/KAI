@@ -448,71 +448,8 @@ def generate_explanation_text(
 
 
 # ==================== Conversion Utilities ====================
-
-
-def convert_logic_engine_proof(logic_proof: Any) -> ProofStep:
-    """
-    Convert component_9 ProofStep to unified ProofStep.
-
-    Args:
-        logic_proof: ProofStep from component_9_logik_engine
-
-    Returns:
-        Unified ProofStep
-    """
-    # Map method to StepType
-    method_mapping = {
-        "fact": StepType.FACT_MATCH,
-        "rule": StepType.RULE_APPLICATION,
-        "graph_traversal": StepType.GRAPH_TRAVERSAL,
-        "probabilistic": StepType.PROBABILISTIC,
-        "decomposition": StepType.DECOMPOSITION,
-    }
-
-    step_type = method_mapping.get(logic_proof.method, StepType.INFERENCE)
-
-    # Extract inputs
-    inputs = [f"{f.pred}({f.args})" for f in logic_proof.supporting_facts]
-
-    # Generate output
-    goal_args_str = ", ".join(f"{k}={v}" for k, v in logic_proof.goal.args.items())
-    output = f"{logic_proof.goal.pred}({goal_args_str})"
-
-    # Generate explanation
-    explanation = generate_explanation_text(
-        step_type=step_type,
-        inputs=inputs,
-        output=output,
-        rule_name=logic_proof.rule_id,
-        bindings=logic_proof.bindings,
-        metadata={"method": logic_proof.method, "goal_depth": logic_proof.goal.depth},
-    )
-
-    # Create unified ProofStep
-    unified_step = ProofStep(
-        step_id=logic_proof.goal.id,
-        step_type=step_type,
-        inputs=inputs,
-        rule_name=logic_proof.rule_id,
-        output=output,
-        confidence=logic_proof.confidence,
-        explanation_text=explanation,
-        parent_steps=[],  # Populated from subgoals
-        bindings=logic_proof.bindings,
-        metadata={
-            "original_method": logic_proof.method,
-            "goal_depth": logic_proof.goal.depth,
-        },
-        source_component="component_9_logik_engine",
-    )
-
-    # Convert subgoals recursively
-    for subproof in logic_proof.subgoals:
-        subgoal_step = convert_logic_engine_proof(subproof)
-        unified_step.add_subgoal(subgoal_step)
-        unified_step.parent_steps.append(subgoal_step.step_id)
-
-    return unified_step
+# NOTE: Logic Engine conversion moved to component_9_logik_engine_proof.py
+# to avoid circular dependencies
 
 
 def convert_reasoning_state(reasoning_state: Any) -> ProofStep:
@@ -768,24 +705,7 @@ def create_aggregated_proof_tree(
 # ==================== Integration Functions ====================
 
 
-def create_proof_tree_from_logic_engine(logic_proof: Any, query: str) -> ProofTree:
-    """
-    Create ProofTree from Logic Engine proof.
-
-    Args:
-        logic_proof: ProofStep from component_9
-        query: The original query
-
-    Returns:
-        Complete ProofTree
-    """
-    tree = ProofTree(query=query)
-
-    if logic_proof:
-        unified_step = convert_logic_engine_proof(logic_proof)
-        tree.add_root_step(unified_step)
-
-    return tree
+# NOTE: create_proof_tree_from_logic_engine moved to component_9_logik_engine_proof.py
 
 
 def create_proof_tree_from_working_memory(memory: Any, query: str) -> ProofTree:

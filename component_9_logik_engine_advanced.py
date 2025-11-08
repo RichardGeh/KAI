@@ -41,9 +41,9 @@ except ImportError:
     ONTOLOGY_CONSTRAINTS_AVAILABLE = False
     logging.getLogger(__name__).warning("Ontology Constraint Generator nicht verfügbar")
 
-# Import Proof Structures
+# Import Proof Structures from core module (not component_17)
 try:
-    from component_17_proof_explanation import ProofStep
+    from component_9_logik_engine_core import ProofStep
 
     PROOF_STRUCTURES_AVAILABLE = True
 except ImportError:

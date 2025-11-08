@@ -54,7 +54,11 @@ from component_9_logik_engine_core import (
 
 # Import mixins
 from component_9_logik_engine_csp import CSPReasoningMixin
-from component_9_logik_engine_proof import ProofTrackingMixin
+from component_9_logik_engine_proof import (
+    ProofTrackingMixin,
+    convert_logic_engine_proof,
+    create_proof_tree_from_logic_engine,
+)
 from component_15_logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -247,6 +251,9 @@ __all__ = [
     "create_fact",
     "create_goal",
     "create_rule",
+    # Conversion functions (for component_17 integration)
+    "convert_logic_engine_proof",
+    "create_proof_tree_from_logic_engine",
     # Availability flags
     "PROBABILISTIC_AVAILABLE",
     "UNIFIED_PROOFS_AVAILABLE",

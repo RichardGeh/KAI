@@ -15,10 +15,12 @@ import logging
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 
 from component_15_logging_config import get_logger
-from component_17_proof_explanation import Goal, ProofStep
 
 if TYPE_CHECKING:
     from component_5_linguistik_strukturen import Fact, Rule
+
+# Import Goal and ProofStep from core module (not from component_17)
+from component_9_logik_engine_core import Goal, ProofStep
 
 # Import Probabilistic Engine for integration
 try:
@@ -36,10 +38,10 @@ except ImportError:
 
 # Import Unified Proof Explanation System
 try:
+    from component_17_proof_explanation import ProofStep as UnifiedProofStep
     from component_17_proof_explanation import (
         ProofTree,
         StepType,
-        convert_logic_engine_proof,
         format_proof_step,
         generate_explanation_text,
     )
@@ -47,6 +49,7 @@ try:
     UNIFIED_PROOFS_AVAILABLE = True
 except ImportError:
     UNIFIED_PROOFS_AVAILABLE = False
+    UnifiedProofStep = None
     logging.getLogger(__name__).warning(
         "Unified Proof Explanation System nicht verfügbar"
     )
@@ -617,3 +620,106 @@ class ProofTrackingMixin:
                 path_str = " -> ".join(path)
                 return f"Fand Pfad über {hops} Schritte: {path_str}"
             return f"Fand Verbindung über {hops} Schritte im Graphen: {subject} -> {target}"
+
+
+# ==================== CONVERSION UTILITIES ====================
+# These functions convert component_9 ProofStep to component_17 Unified ProofStep
+
+
+def convert_logic_engine_proof(logic_proof: ProofStep) -> "UnifiedProofStep":
+    """
+    Convert component_9 ProofStep to unified ProofStep (component_17).
+
+    Args:
+        logic_proof: ProofStep from component_9_logik_engine_core
+
+    Returns:
+        Unified ProofStep from component_17
+
+    Raises:
+        Exception if UNIFIED_PROOFS_AVAILABLE is False
+    """
+    if not UNIFIED_PROOFS_AVAILABLE:
+        raise ImportError("Unified Proof System nicht verfügbar")
+
+    # Map method to StepType
+    method_mapping = {
+        "fact": StepType.FACT_MATCH,
+        "rule": StepType.RULE_APPLICATION,
+        "graph_traversal": StepType.GRAPH_TRAVERSAL,
+        "probabilistic": StepType.PROBABILISTIC,
+        "decomposition": StepType.DECOMPOSITION,
+    }
+
+    step_type = method_mapping.get(logic_proof.method, StepType.INFERENCE)
+
+    # Extract inputs
+    inputs = [f"{f.pred}({f.args})" for f in logic_proof.supporting_facts]
+
+    # Generate output
+    goal_args_str = ", ".join(f"{k}={v}" for k, v in logic_proof.goal.args.items())
+    output = f"{logic_proof.goal.pred}({goal_args_str})"
+
+    # Generate explanation
+    explanation = generate_explanation_text(
+        step_type=step_type,
+        inputs=inputs,
+        output=output,
+        rule_name=logic_proof.rule_id,
+        bindings=logic_proof.bindings,
+        metadata={"method": logic_proof.method, "goal_depth": logic_proof.goal.depth},
+    )
+
+    # Create unified ProofStep
+    unified_step = UnifiedProofStep(
+        step_id=logic_proof.goal.id,
+        step_type=step_type,
+        inputs=inputs,
+        rule_name=logic_proof.rule_id,
+        output=output,
+        confidence=logic_proof.confidence,
+        explanation_text=explanation,
+        parent_steps=[],  # Populated from subgoals
+        bindings=logic_proof.bindings,
+        metadata={
+            "original_method": logic_proof.method,
+            "goal_depth": logic_proof.goal.depth,
+        },
+        source_component="component_9_logik_engine",
+    )
+
+    # Convert subgoals recursively
+    for subproof in logic_proof.subgoals:
+        subgoal_step = convert_logic_engine_proof(subproof)
+        unified_step.add_subgoal(subgoal_step)
+        unified_step.parent_steps.append(subgoal_step.step_id)
+
+    return unified_step
+
+
+def create_proof_tree_from_logic_engine(
+    logic_proof: ProofStep, query: str
+) -> ProofTree:
+    """
+    Create ProofTree from Logic Engine proof.
+
+    Args:
+        logic_proof: ProofStep from component_9
+        query: The original query
+
+    Returns:
+        Complete ProofTree from component_17
+
+    Raises:
+        Exception if UNIFIED_PROOFS_AVAILABLE is False
+    """
+    if not UNIFIED_PROOFS_AVAILABLE:
+        raise ImportError("Unified Proof System nicht verfügbar")
+
+    tree = ProofTree(query=query)
+
+    if logic_proof:
+        unified_step = convert_logic_engine_proof(logic_proof)
+        tree.add_root_step(unified_step)
+
+    return tree

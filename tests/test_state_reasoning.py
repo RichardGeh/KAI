@@ -592,8 +592,11 @@ class TestAction:
 
     def test_action_is_applicable(self):
         """Test action applicability checking."""
+
         # Action requires x > 0
-        precond = lambda s: s.get("x", 0) > 0
+        def precond(s):
+            return s.get("x", 0) > 0
+
         action = Action("move", [precond], [])
 
         state1 = State({"x": 5})
@@ -606,9 +609,14 @@ class TestAction:
 
     def test_action_apply(self):
         """Test action application with effects."""
+
         # Action increments x by 1
-        precond = lambda s: s.get("x", 0) < 10
-        effect = lambda s: State({"x": s.get("x", 0) + 1})
+        def precond(s):
+            return s.get("x", 0) < 10
+
+        def effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
         action = Action("increment", [precond], [effect])
 
         state = State({"x": 5})
@@ -620,8 +628,13 @@ class TestAction:
 
     def test_action_not_applicable(self):
         """Test action returns None when not applicable."""
-        precond = lambda s: s.get("x", 0) > 100
-        effect = lambda s: State({"x": 0})
+
+        def precond(s):
+            return s.get("x", 0) > 100
+
+        def effect(s):
+            return State({"x": 0})
+
         action = Action("reset", [precond], [effect])
 
         state = State({"x": 5})
@@ -631,8 +644,13 @@ class TestAction:
 
     def test_action_multiple_preconditions(self):
         """Test action with multiple preconditions (AND)."""
-        precond1 = lambda s: s.get("x", 0) > 0
-        precond2 = lambda s: s.get("y", 0) > 0
+
+        def precond1(s):
+            return s.get("x", 0) > 0
+
+        def precond2(s):
+            return s.get("y", 0) > 0
+
         action = Action("both", [precond1, precond2], [])
 
         assert action.is_applicable(State({"x": 1, "y": 1}))
@@ -641,8 +659,12 @@ class TestAction:
 
     def test_action_multiple_effects(self):
         """Test action with multiple effects applied sequentially."""
-        effect1 = lambda s: State({"x": s.get("x", 0) + 1, "y": s.get("y", 0)})
-        effect2 = lambda s: State({"x": s.get("x", 0), "y": s.get("y", 0) * 2})
+
+        def effect1(s):
+            return State({"x": s.get("x", 0) + 1, "y": s.get("y", 0)})
+
+        def effect2(s):
+            return State({"x": s.get("x", 0), "y": s.get("y", 0) * 2})
 
         action = Action("multi", [], [effect1, effect2])
 
@@ -662,13 +684,21 @@ class TestStateSpacePlanner:
 
         # Start at 0, goal is 5
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 5
+
+        def goal(s):
+            return s.get("x") == 5
 
         # Only one action: increment x
+        def increment_precond(s):
+            return s.get("x", 0) < 100
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
         increment = Action(
             "increment",
-            [lambda s: s.get("x", 0) < 100],
-            [lambda s: State({"x": s.get("x", 0) + 1})],
+            [increment_precond],
+            [increment_effect],
             cost=1.0,
         )
 
@@ -683,38 +713,45 @@ class TestStateSpacePlanner:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0, "y": 0})
-        goal = lambda s: s.get("x") == 3 and s.get("y") == 2
+
+        def goal(s):
+            return s.get("x") == 3 and s.get("y") == 2
 
         # Define 4-directional movement
+        def right_precond(s):
+            return s.get("x", 0) < 10
+
+        def right_effect(s):
+            return State({"x": s.get("x", 0) + 1, "y": s.get("y", 0)})
+
+        def up_precond(s):
+            return s.get("y", 0) < 10
+
+        def up_effect(s):
+            return State({"x": s.get("x", 0), "y": s.get("y", 0) + 1})
+
+        def left_precond(s):
+            return s.get("x", 0) > 0
+
+        def left_effect(s):
+            return State({"x": s.get("x", 0) - 1, "y": s.get("y", 0)})
+
+        def down_precond(s):
+            return s.get("y", 0) > 0
+
+        def down_effect(s):
+            return State({"x": s.get("x", 0), "y": s.get("y", 0) - 1})
+
         actions = [
-            Action(
-                "right",
-                [lambda s: s.get("x", 0) < 10],
-                [lambda s: State({"x": s.get("x", 0) + 1, "y": s.get("y", 0)})],
-                cost=1.0,
-            ),
-            Action(
-                "up",
-                [lambda s: s.get("y", 0) < 10],
-                [lambda s: State({"x": s.get("x", 0), "y": s.get("y", 0) + 1})],
-                cost=1.0,
-            ),
-            Action(
-                "left",
-                [lambda s: s.get("x", 0) > 0],
-                [lambda s: State({"x": s.get("x", 0) - 1, "y": s.get("y", 0)})],
-                cost=1.0,
-            ),
-            Action(
-                "down",
-                [lambda s: s.get("y", 0) > 0],
-                [lambda s: State({"x": s.get("x", 0), "y": s.get("y", 0) - 1})],
-                cost=1.0,
-            ),
+            Action("right", [right_precond], [right_effect], cost=1.0),
+            Action("up", [up_precond], [up_effect], cost=1.0),
+            Action("left", [left_precond], [left_effect], cost=1.0),
+            Action("down", [down_precond], [down_effect], cost=1.0),
         ]
 
         # Use Manhattan distance heuristic
-        heuristic = lambda s: abs(s.get("x", 0) - 3) + abs(s.get("y", 0) - 2)
+        def heuristic(s):
+            return abs(s.get("x", 0) - 3) + abs(s.get("y", 0) - 2)
 
         plan = planner.plan(initial, goal, actions, heuristic)
 
@@ -731,11 +768,14 @@ class TestStateSpacePlanner:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == -5  # Impossible with only increment
 
-        increment = Action(
-            "increment", [], [lambda s: State({"x": s.get("x", 0) + 1})], cost=1.0
-        )
+        def goal(s):
+            return s.get("x") == -5  # Impossible with only increment
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        increment = Action("increment", [], [increment_effect], cost=1.0)
 
         plan = planner.plan(initial, goal, [increment])
 
@@ -752,19 +792,29 @@ class TestStateSpacePlanner:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 10
+
+        def goal(s):
+            return s.get("x") == 10
 
         # Two ways to reach goal: slow (1 per step) or fast (2 per step)
-        slow = Action("slow", [], [lambda s: State({"x": s.get("x", 0) + 1})], cost=1.0)
+        def slow_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        slow = Action("slow", [], [slow_effect], cost=1.0)
+
+        def fast_effect(s):
+            return State({"x": s.get("x", 0) + 2})
+
         fast = Action(
             "fast",
             [],
-            [lambda s: State({"x": s.get("x", 0) + 2})],
+            [fast_effect],
             cost=1.5,  # Total: 5 steps * 1.5 = 7.5 (cheaper than 10 * 1.0 = 10.0)
         )
 
         # Heuristic: remaining distance
-        heuristic = lambda s: abs(s.get("x", 0) - 10)
+        def heuristic(s):
+            return abs(s.get("x", 0) - 10)
 
         plan = planner.plan(initial, goal, [slow, fast], heuristic)
 
@@ -777,11 +827,14 @@ class TestStateSpacePlanner:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 3
 
-        increment = Action(
-            "increment", [], [lambda s: State({"x": s.get("x", 0) + 1})], cost=1.0
-        )
+        def goal(s):
+            return s.get("x") == 3
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        increment = Action("increment", [], [increment_effect], cost=1.0)
 
         plan = planner.plan(initial, goal, [increment])
 
@@ -805,11 +858,14 @@ class TestStateSpacePlanner:
         planner = StateSpacePlanner(max_iterations=10)
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 1000  # Would take 1000 steps
 
-        increment = Action(
-            "increment", [], [lambda s: State({"x": s.get("x", 0) + 1})], cost=1.0
-        )
+        def goal(s):
+            return s.get("x") == 1000  # Would take 1000 steps
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        increment = Action("increment", [], [increment_effect], cost=1.0)
 
         plan = planner.plan(initial, goal, [increment])
 
@@ -824,11 +880,14 @@ class TestBFSPlanning:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 3
 
-        increment = Action(
-            "increment", [], [lambda s: State({"x": s.get("x", 0) + 1})], cost=1.0
-        )
+        def goal(s):
+            return s.get("x") == 3
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        increment = Action("increment", [], [increment_effect], cost=1.0)
 
         plan = planner.plan_with_bfs(initial, goal, [increment])
 
@@ -840,11 +899,20 @@ class TestBFSPlanning:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 10
+
+        def goal(s):
+            return s.get("x") == 10
 
         # Two actions: +1 or +2
-        inc1 = Action("inc1", [], [lambda s: State({"x": s.get("x", 0) + 1})])
-        inc2 = Action("inc2", [], [lambda s: State({"x": s.get("x", 0) + 2})])
+        def inc1_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        inc1 = Action("inc1", [], [inc1_effect])
+
+        def inc2_effect(s):
+            return State({"x": s.get("x", 0) + 2})
+
+        inc2 = Action("inc2", [], [inc2_effect])
 
         plan = planner.plan_with_bfs(initial, goal, [inc1, inc2])
 
@@ -856,9 +924,14 @@ class TestBFSPlanning:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 100
 
-        increment = Action("increment", [], [lambda s: State({"x": s.get("x", 0) + 1})])
+        def goal(s):
+            return s.get("x") == 100
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        increment = Action("increment", [], [increment_effect])
 
         plan = planner.plan_with_bfs(initial, goal, [increment], max_depth=10)
 
@@ -869,9 +942,14 @@ class TestBFSPlanning:
         planner = StateSpacePlanner()
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 2
 
-        increment = Action("increment", [], [lambda s: State({"x": s.get("x", 0) + 1})])
+        def goal(s):
+            return s.get("x") == 2
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        increment = Action("increment", [], [increment_effect])
 
         plan = planner.plan_with_bfs(initial, goal, [increment])
 
@@ -943,9 +1021,14 @@ class TestConstraintIntegration:
         planner = StateSpacePlanner(constraint_solver=solver)
 
         initial = State({"x": 0})
-        goal = lambda s: s.get("x") == 5
 
-        increment = Action("increment", [], [lambda s: State({"x": s.get("x", 0) + 1})])
+        def goal(s):
+            return s.get("x") == 5
+
+        def increment_effect(s):
+            return State({"x": s.get("x", 0) + 1})
+
+        increment = Action("increment", [], [increment_effect])
 
         # Should work (validation doesn't add constraints yet)
         plan = planner.plan(initial, goal, [increment])

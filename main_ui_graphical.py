@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 import kai_encoding_fix  # noqa: F401 (automatische Aktivierung beim Import)
 from component_1_netzwerk import KonzeptNetzwerk
 from component_11_embedding_service import EmbeddingService
-from component_15_logging_config import logger, setup_logging
+from component_15_logging_config import setup_logging
 from kai_config import get_config
 from kai_exceptions import KAIException, get_user_friendly_message
 from kai_worker import KaiWorker
