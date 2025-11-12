@@ -8,10 +8,19 @@ Testet:
 """
 
 import sys
-from PySide6.QtWidgets import QApplication, QMainWindow, QVBoxLayout, QWidget, QPushButton, QLabel
+
+from PySide6.QtWidgets import (
+    QApplication,
+    QLabel,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+)
+
 from component_1_netzwerk_core import KonzeptNetzwerkCore
-from component_52_arithmetic_reasoning import ArithmeticEngine
 from component_18_proof_tree_widget import ProofTreeWidget
+from component_52_arithmetic_reasoning import ArithmeticEngine
 
 
 class MathProofTestWindow(QMainWindow):
@@ -91,12 +100,14 @@ class MathProofTestWindow(QMainWindow):
 
             # Proof Tree Text ausgeben
             from component_17_proof_explanation import format_proof_tree
+
             proof_text = format_proof_tree(result.proof_tree, show_details=True)
             print(f"\n{proof_text}")
 
         except Exception as e:
             print(f"[ERROR] Fehler bei Test: {e}")
             import traceback
+
             traceback.print_exc()
 
     def test_complex_calculation(self):
@@ -129,6 +140,7 @@ class MathProofTestWindow(QMainWindow):
         except Exception as e:
             print(f"[ERROR] Fehler bei komplexer Berechnung: {e}")
             import traceback
+
             traceback.print_exc()
 
 
@@ -137,7 +149,8 @@ def main():
     app = QApplication(sys.argv)
 
     # Dark Theme
-    app.setStyleSheet("""
+    app.setStyleSheet(
+        """
         QWidget {
             background-color: #2c3e50;
             color: #ecf0f1;
@@ -161,7 +174,8 @@ def main():
         QLabel {
             color: #3498db;
         }
-    """)
+    """
+    )
 
     window = MathProofTestWindow()
     window.show()

@@ -8,16 +8,17 @@ Testet:
 """
 
 import sys
+
 from component_1_netzwerk_core import KonzeptNetzwerkCore
+from component_17_proof_explanation import StepType, format_proof_tree
 from component_52_arithmetic_reasoning import ArithmeticEngine
-from component_17_proof_explanation import format_proof_tree, StepType
 
 
 def test_arithmetic_proof_tree():
     """Testet ArithmeticEngine Proof Tree Erstellung"""
-    print("="*80)
+    print("=" * 80)
     print("TEST: Arithmetic Proof Tree Integration")
-    print("="*80)
+    print("=" * 80)
 
     # Initialisierung
     print("\n[1/4] Initialisiere ArithmeticEngine...")
@@ -39,7 +40,9 @@ def test_arithmetic_proof_tree():
     # Finde Step-Typen
     step_types = [step.step_type for step in steps]
     assert StepType.PREMISE in step_types, "ProofTree sollte PREMISE enthalten"
-    assert StepType.RULE_APPLICATION in step_types, "ProofTree sollte RULE_APPLICATION enthalten"
+    assert (
+        StepType.RULE_APPLICATION in step_types
+    ), "ProofTree sollte RULE_APPLICATION enthalten"
     assert StepType.CONCLUSION in step_types, "ProofTree sollte CONCLUSION enthalten"
     print("  ✓ ProofTree-Struktur korrekt")
 
@@ -70,6 +73,7 @@ def test_arithmetic_proof_tree():
 
     # Teste Unicode-Formatierung
     from component_18_proof_tree_widget import ProofNodeItem
+
     # Erstelle temporären Node für Formatierungs-Test
     class DummyStep:
         def __init__(self):
@@ -84,6 +88,7 @@ def test_arithmetic_proof_tree():
             self.step_id = "test"
             self.parent_steps = []
             from datetime import datetime
+
             self.timestamp = datetime.now()
             self.source_component = "test"
 
@@ -103,12 +108,14 @@ def test_arithmetic_proof_tree():
     print("  ✓ Unicode-Formatierung funktioniert")
 
     # Zusammenfassung
-    print("\n" + "="*80)
+    print("\n" + "=" * 80)
     print("ERFOLG: Alle Tests bestanden!")
-    print("="*80)
+    print("=" * 80)
     print("\nZusammenfassung:")
     print("  ✓ ArithmeticEngine erstellt korrekte ProofTrees")
-    print("  ✓ ProofTree-Struktur ist vollständig (PREMISE, RULE_APPLICATION, CONCLUSION)")
+    print(
+        "  ✓ ProofTree-Struktur ist vollständig (PREMISE, RULE_APPLICATION, CONCLUSION)"
+    )
     print("  ✓ Division enthält Constraint-Check (Division durch Null)")
     print("  ✓ Unicode-Symbole werden korrekt formatiert (× ÷)")
     print("\nIntegration abgeschlossen!")
@@ -121,5 +128,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\n[ERROR] Test fehlgeschlagen: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

@@ -3,9 +3,10 @@ Manuelle Validierung der Grundrechenarten
 Demonstriert die Verwendung der ArithmeticEngine
 """
 
-from component_52_arithmetic_reasoning import ArithmeticEngine
-from component_1_netzwerk_core import KonzeptNetzwerkCore
 from fractions import Fraction
+
+from component_1_netzwerk_core import KonzeptNetzwerkCore
+from component_52_arithmetic_reasoning import ArithmeticEngine
 
 
 def print_result(operation, a, b, result):
@@ -30,7 +31,9 @@ def print_result(operation, a, b, result):
 
             # Level 3
             for k, sub_subgoal in enumerate(subgoal.subgoals):
-                print(f"       └─ Step {i+1}.{j+1}.{k+1} ({sub_subgoal.step_type.value}):")
+                print(
+                    f"       └─ Step {i+1}.{j+1}.{k+1} ({sub_subgoal.step_type.value}):"
+                )
                 print(f"          {sub_subgoal.explanation_text}")
 
     print(f"{'=' * 60}")
@@ -43,9 +46,7 @@ def main():
 
     # Initialisiere Engine
     netzwerk = KonzeptNetzwerkCore(
-        uri="bolt://127.0.0.1:7687",
-        user="neo4j",
-        password="password"
+        uri="bolt://127.0.0.1:7687", user="neo4j", password="password"
     )
     engine = ArithmeticEngine(netzwerk)
 

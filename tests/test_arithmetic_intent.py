@@ -3,10 +3,10 @@
 Testskript für die arithmetische Intent-Erkennung (Schritt 1.4)
 """
 
+from component_5_linguistik_strukturen import MeaningPointCategory
 from component_6_linguistik_engine import LinguisticPreprocessor
 from component_7_meaning_extractor import MeaningPointExtractor
 from component_11_embedding_service import EmbeddingService
-from component_5_linguistik_strukturen import MeaningPointCategory
 
 
 def test_arithmetic_detection():
@@ -18,7 +18,7 @@ def test_arithmetic_detection():
     extractor = MeaningPointExtractor(
         embedding_service=embedding_service,
         preprocessor=preprocessor,
-        prototyping_engine=None
+        prototyping_engine=None,
     )
 
     # Test-Fälle
@@ -28,7 +28,11 @@ def test_arithmetic_detection():
         ("Wieviel sind 10 durch 2?", True, 0.95),
         ("Berechne 15 minus 6", True, 0.95),  # "berechne" ist auch question_trigger
         ("Was ist 3 + 5?", True, 0.95),
-        ("Rechne 100 dividiert durch 4", True, 0.95),  # "rechne" ist auch question_trigger
+        (
+            "Rechne 100 dividiert durch 4",
+            True,
+            0.95,
+        ),  # "rechne" ist auch question_trigger
         ("Was ist ein Apfel?", False, None),  # Keine arithmetische Frage
         ("Ein Apfel ist eine Frucht.", False, None),  # Definition
     ]
@@ -40,7 +44,7 @@ def test_arithmetic_detection():
     failed = 0
 
     for i, (text, should_detect, expected_confidence) in enumerate(test_cases, 1):
-        print(f"\n📝 Test {i}: '{text}'")
+        print("\n📝 Test {i}: '{text}'")
 
         # Preprocessing
         doc = preprocessor.process(text)
@@ -50,7 +54,7 @@ def test_arithmetic_detection():
 
         # Validierung
         if not meaning_points:
-            print(f"   ❌ FEHLER: Keine MeaningPoints zurückgegeben")
+            print("   ❌ FEHLER: Keine MeaningPoints zurückgegeben")
             failed += 1
             continue
 
@@ -61,35 +65,39 @@ def test_arithmetic_detection():
             if is_arithmetic:
                 confidence_ok = abs(mp.confidence - expected_confidence) < 0.01
                 if confidence_ok:
-                    print(f"   ✓ PASSED: Erkannt als ARITHMETIC_QUESTION")
-                    print(f"     Confidence: {mp.confidence:.2f} (erwartet: {expected_confidence})")
+                    print("   ✓ PASSED: Erkannt als ARITHMETIC_QUESTION")
+                    print(
+                        "     Confidence: {mp.confidence:.2f} (erwartet: {expected_confidence})"
+                    )
                     passed += 1
                 else:
-                    print(f"   ❌ FAILED: Confidence stimmt nicht")
-                    print(f"     Erhalten: {mp.confidence:.2f}, Erwartet: {expected_confidence}")
+                    print("   ❌ FAILED: Confidence stimmt nicht")
+                    print(
+                        "   Erhalten: {mp.confidence:.2f}, Erwartet: {expected_confidence}"
+                    )
                     failed += 1
             else:
-                print(f"   ❌ FAILED: Nicht als arithmetisch erkannt")
-                print(f"     Kategorie: {mp.category.name}")
+                print("   ❌ FAILED: Nicht als arithmetisch erkannt")
+                print("     Kategorie: {mp.category.name}")
                 failed += 1
         else:
             if not is_arithmetic:
-                print(f"   ✓ PASSED: Korrekt NICHT als arithmetisch erkannt")
-                print(f"     Kategorie: {mp.category.name}")
+                print("   ✓ PASSED: Korrekt NICHT als arithmetisch erkannt")
+                print("     Kategorie: {mp.category.name}")
                 passed += 1
             else:
-                print(f"   ❌ FAILED: Fälschlicherweise als arithmetisch erkannt")
+                print("   ❌ FAILED: Fälschlicherweise als arithmetisch erkannt")
                 failed += 1
 
     # Zusammenfassung
     print("\n" + "=" * 60)
-    print(f"📊 ERGEBNIS: {passed}/{len(test_cases)} Tests bestanden")
+    print("📊 ERGEBNIS: {passed}/{len(test_cases)} Tests bestanden")
 
     if failed == 0:
         print("✓ Alle Tests erfolgreich!")
         return True
     else:
-        print(f"❌ {failed} Tests fehlgeschlagen")
+        print("❌ {failed} Tests fehlgeschlagen")
         return False
 
 

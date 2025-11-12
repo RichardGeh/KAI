@@ -3,12 +3,12 @@ Manuelle Validierung des Zahl-Wort-Systems (component_53)
 Demonstriert bidirektionale Konvertierung und Neo4j Integration
 """
 
+from component_1_netzwerk_core import KonzeptNetzwerkCore
 from component_53_number_language import (
-    NumberParser,
     NumberFormatter,
     NumberLanguageConnector,
+    NumberParser,
 )
-from component_1_netzwerk_core import KonzeptNetzwerkCore
 
 
 def print_section(title):
