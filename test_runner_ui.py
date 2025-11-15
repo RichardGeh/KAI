@@ -6,14 +6,12 @@ Test-Runner UI für KAI - Hierarchische Test-Ausführung mit Live-Updates.
 Separiert aus settings_ui.py für eigenständige Verwendung.
 """
 
-import logging
 import subprocess
 import sys
 import traceback
 from typing import Dict, List
 
 from PySide6.QtCore import Qt, QThread, Signal, Slot
-from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
     QGroupBox,

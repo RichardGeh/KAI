@@ -642,14 +642,14 @@ class AbductiveEngine:
                     if not is_consistent:
                         logger.info(
                             f"SAT-Solver: Widerspruch gefunden für "
-                            f"{fact.pred}({subject} → {obj})"
+                            f"{fact.pred}({subject} -> {obj})"
                         )
                         return True
                     else:
-                        # SAT sagt: konsistent → Kein Widerspruch
+                        # SAT sagt: konsistent -> Kein Widerspruch
                         logger.debug(
                             f"SAT-Solver: Kein Widerspruch für "
-                            f"{fact.pred}({subject} → {obj})"
+                            f"{fact.pred}({subject} -> {obj})"
                         )
                         return False
 

@@ -815,3 +815,83 @@ def format_reasoning_trace_for_ui(memory: WorkingMemory) -> str:
         lines.append(f"  Konfidenz: {state.confidence:.2f}")
 
     return "\n".join(lines)
+
+
+def create_response_generation_state_from_context(
+    context_frame: ContextFrame,
+    available_facts: Optional[List[Dict[str, Any]]] = None,
+    max_cycles: int = 50,
+):
+    """
+    Erstellt einen ResponseGenerationState aus einem ContextFrame.
+
+    Bridge-Funktion zwischen WorkingMemory und ProductionSystem.
+    Konvertiert den ContextFrame in einen State für Response Generation.
+
+    Args:
+        context_frame: Der ContextFrame aus WorkingMemory
+        available_facts: Verfügbare Fakten aus Knowledge Graph
+        max_cycles: Maximale Anzahl von Production Cycles
+
+    Returns:
+        ResponseGenerationState für Production System
+
+    Note:
+        Importiert ResponseGenerationState aus component_54_production_system
+    """
+    from component_54_production_system import (
+        DiscourseState,
+        GenerationGoal,
+        GenerationGoalType,
+        PartialTextStructure,
+        ResponseGenerationState,
+    )
+
+    # Mappe ContextType zu GenerationGoalType
+    context_to_goal_mapping = {
+        ContextType.QUESTION: GenerationGoalType.ANSWER_QUESTION,
+        ContextType.DEFINITION: GenerationGoalType.EXPLAIN_CONCEPT,
+        ContextType.INFERENCE: GenerationGoalType.PROVIDE_EVIDENCE,
+        ContextType.CLARIFICATION: GenerationGoalType.CLARIFY_AMBIGUITY,
+        ContextType.PATTERN_LEARNING: GenerationGoalType.EXPLAIN_CONCEPT,
+        ContextType.TEXT_INGESTION: GenerationGoalType.DESCRIBE_RELATION,
+    }
+
+    goal_type = context_to_goal_mapping.get(
+        context_frame.context_type, GenerationGoalType.ANSWER_QUESTION
+    )
+
+    # Erstelle Primary Goal
+    target_entity = context_frame.entities[0] if context_frame.entities else None
+    primary_goal = GenerationGoal(
+        goal_type=goal_type,
+        target_entity=target_entity,
+        relation_type=None,
+        constraints={},
+        priority=1.0,
+        completed=False,
+    )
+
+    # Erstelle Discourse State mit bereits erwähnten Entitäten
+    discourse = DiscourseState(
+        current_focus=target_entity,
+        mentioned_entities=set(context_frame.entities),
+        pending_facts=[],
+        discourse_markers_used=[],
+        sentence_count=0,
+        current_paragraph=0,
+    )
+
+    # Erstelle ResponseGenerationState
+    state = ResponseGenerationState(
+        primary_goal=primary_goal,
+        sub_goals=[],
+        discourse=discourse,
+        text=PartialTextStructure(),
+        available_facts=available_facts or [],
+        constraints=context_frame.metadata,
+        cycle_count=0,
+        max_cycles=max_cycles,
+    )
+
+    return state

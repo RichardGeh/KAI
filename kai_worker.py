@@ -96,6 +96,9 @@ class KaiSignals(QObject):
         str, str, int
     )  # (preview, file_name, char_count) - blockiert Worker
     preview_confirmation_response = Signal(bool)  # (confirmed) - User-Antwort
+    production_system_trace = Signal(
+        str, str
+    )  # (rule_name, description) - PHASE 5: Production System Regelanwendungen
 
 
 class KaiWorker(QObject):
@@ -199,6 +202,36 @@ class KaiWorker(QObject):
             # Input Orchestrator für Multi-Segment-Verarbeitung (Logik-Rätsel)
             self.input_orchestrator = InputOrchestrator(preprocessor=self.preprocessor)
             logger.info("Input Orchestrator aktiviert (für komplexe Eingaben)")
+
+            # PHASE 9: Production System Engine mit Neo4j Repository
+            from component_54_production_system import (
+                ProductionSystemEngine,
+                create_all_content_selection_rules,
+            )
+
+            self.production_system_engine = ProductionSystemEngine(
+                signals=self.signals,
+                neo4j_repository=self.netzwerk._production_rules,  # Access internal repository
+            )
+
+            # Füge Standard-Regeln hinzu (falls nicht in Neo4j vorhanden)
+            standard_rules = create_all_content_selection_rules()
+            self.production_system_engine.add_rules(standard_rules)
+
+            # Versuche Regeln aus Neo4j zu laden (Stats-Sync)
+            loaded_count = self.production_system_engine.load_rules_from_neo4j()
+            if loaded_count > 0:
+                logger.info(
+                    f"Production System: {loaded_count} Regel-Stats aus Neo4j geladen"
+                )
+            else:
+                # Initial Save: Speichere Standard-Regeln zu Neo4j
+                saved_count = self.production_system_engine.save_rules_to_neo4j()
+                logger.info(
+                    f"Production System: {saved_count} Standard-Regeln initial zu Neo4j gespeichert"
+                )
+
+            logger.info("Production System Engine aktiviert (mit Neo4j Persistierung)")
 
             self.is_initialized_successfully = True
             logger.info("KAI Worker & alle Subsysteme erfolgreich initialisiert.")

@@ -110,7 +110,7 @@ class AdvancedReasoningMixin:
             fact_literals.append(Literal(lit_name, negated))
 
         # Konvertiere Regeln zu Implikationen
-        # Rule: (p1 ∧ p2) → conclusion
+        # Rule: (p1 AND p2) -> conclusion
         # CNF: ¬p1 ∨ ¬p2 ∨ conclusion
         rule_implications = []
         for rule in self.rules:
@@ -149,9 +149,9 @@ class AdvancedReasoningMixin:
         is_consistent = len(conflicts) == 0
 
         if is_consistent:
-            logger.info("✓ Wissensbasis ist konsistent.")
+            logger.info("[OK] Wissensbasis ist konsistent.")
         else:
-            logger.warning(f"✗ Wissensbasis hat {len(conflicts)} Konflikte:")
+            logger.warning(f"[FEHLER] Wissensbasis hat {len(conflicts)} Konflikte:")
             for conflict in conflicts:
                 logger.warning(f"  - {conflict}")
 
@@ -247,9 +247,9 @@ class AdvancedReasoningMixin:
         is_consistent, model = self.kb_checker.check_rule_consistency(rule_implications)
 
         if is_consistent:
-            logger.info("✓ Regeln sind konsistent.")
+            logger.info("[OK] Regeln sind konsistent.")
         else:
-            logger.warning("✗ Regeln sind inkonsistent (widersprechen sich).")
+            logger.warning("[FEHLER] Regeln sind inkonsistent (widersprechen sich).")
 
         return is_consistent, model
 
@@ -279,7 +279,7 @@ class AdvancedReasoningMixin:
         """
         Prüft Konsistenz einer Faktenmenge via SAT mit semantischen Constraints.
 
-        Konvertiert Fakten → propositionale Formeln → CNF und
+        Konvertiert Fakten -> propositionale Formeln -> CNF und
         nutzt SAT-Solver für Consistency-Check. Lädt zusätzlich
         semantische Constraints aus der Ontologie.
 
@@ -356,7 +356,7 @@ class AdvancedReasoningMixin:
             formula.add_clause(Clause({lit}))
 
         # Erweitere mit relevanten Regeln (falls vorhanden)
-        # Regeln als Implikationen: (p1 ∧ p2) → conclusion
+        # Regeln als Implikationen: (p1 AND p2) -> conclusion
         # CNF: ¬p1 ∨ ¬p2 ∨ conclusion
         for rule in self.rules:
             if not rule.when or not rule.then:
@@ -426,11 +426,13 @@ class AdvancedReasoningMixin:
         is_consistent = result == SATResult.SATISFIABLE
 
         if is_consistent:
-            logger.info("✓ Faktenmenge ist konsistent.")
+            logger.info("[OK] Faktenmenge ist konsistent.")
             if model:
                 logger.debug(f"Satisfying assignment gefunden: {len(model)} Variablen")
         else:
-            logger.warning("✗ Faktenmenge ist inkonsistent (enthält Widersprüche).")
+            logger.warning(
+                "[FEHLER] Faktenmenge ist inkonsistent (enthält Widersprüche)."
+            )
 
         return is_consistent
 
@@ -452,7 +454,7 @@ class AdvancedReasoningMixin:
             2. Exklusive Eigenschaften:
                - Fact1: HAS_PROPERTY(apfel, rot)
                - Fact2: HAS_PROPERTY(apfel, grün)
-               (wenn Regeln definieren, dass rot ∧ grün → FALSE)
+               (wenn Regeln definieren, dass rot AND gruen -> FALSE)
 
             3. Zyklische Hierarchien:
                - Fact1: IS_A(A, B)
@@ -1296,7 +1298,7 @@ class AdvancedReasoningMixin:
                 Fact(pred="IS_A", args={"subject": "hund", "object": "tier"}),
                 Fact(pred="IS_A", args={"subject": "hund", "object": "pflanze"})
             ]
-            → Generiere Constraint: ¬(hund_IS_A_tier) ∨ ¬(hund_IS_A_pflanze)
+            -> Generiere Constraint: NOT(hund_IS_A_tier) OR NOT(hund_IS_A_pflanze)
         """
         if not self.use_ontology_constraints or not self.ontology_generator:
             return []

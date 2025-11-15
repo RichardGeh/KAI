@@ -169,6 +169,10 @@ class KonzeptNetzwerkCore:
                         "MetaBeliefId",
                         "CREATE CONSTRAINT MetaBeliefId IF NOT EXISTS FOR (mb:MetaBelief) REQUIRE mb.id IS UNIQUE",
                     ),
+                    (
+                        "ProductionRuleName",
+                        "CREATE CONSTRAINT ProductionRuleName IF NOT EXISTS FOR (pr:ProductionRule) REQUIRE pr.name IS UNIQUE",
+                    ),
                 ]
 
                 for constraint_name, query in constraints:
@@ -209,19 +213,26 @@ class KonzeptNetzwerkCore:
                 # Note: wort_lemma_index wird automatisch durch UNIQUE Constraint erstellt
 
                 # Indizes für Relationship Properties
-                # Neo4j syntax variiert je nach Version, wir verwenden die moderne Syntax
+                # HINWEIS: Neo4j 5.x unterstützt keine generischen Relationship-Indizes ohne Typ-Angabe
+                # Spezifische Indizes für die wichtigsten Relationship-Typen
                 indexes: List[tuple[str, str]] = [
-                    # Index für Confidence-Filter auf allen Relationships
+                    # Index für IS_A Relationships mit Confidence-Filter
                     (
-                        "relation_confidence_index",
-                        "CREATE INDEX relation_confidence_index IF NOT EXISTS "
-                        "FOR ()-[r]-() ON (r.confidence)",
+                        "isa_confidence_index",
+                        "CREATE INDEX isa_confidence_index IF NOT EXISTS "
+                        "FOR ()-[r:IS_A]-() ON (r.confidence)",
                     ),
-                    # Index für Context-Filter auf allen Relationships
+                    # Index für HAS_PROPERTY Relationships mit Confidence-Filter
                     (
-                        "relation_context_index",
-                        "CREATE INDEX relation_context_index IF NOT EXISTS "
-                        "FOR ()-[r]-() ON (r.context)",
+                        "property_confidence_index",
+                        "CREATE INDEX property_confidence_index IF NOT EXISTS "
+                        "FOR ()-[r:HAS_PROPERTY]-() ON (r.confidence)",
+                    ),
+                    # Index für CAPABLE_OF Relationships mit Confidence-Filter
+                    (
+                        "capable_confidence_index",
+                        "CREATE INDEX capable_confidence_index IF NOT EXISTS "
+                        "FOR ()-[r:CAPABLE_OF]-() ON (r.confidence)",
                     ),
                 ]
 
@@ -1491,3 +1502,372 @@ class KonzeptNetzwerkCore:
         except Exception as e:
             logger.log_exception(e, "get_node_count: Fehler")
             return 0
+
+    # ============================================================================
+    # Production Rule Management (Component 54)
+    # ============================================================================
+
+    def create_production_rule(
+        self,
+        name: str,
+        category: str,
+        utility: float = 1.0,
+        specificity: float = 1.0,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """
+        Persistiert eine Produktionsregel in Neo4j.
+
+        Args:
+            name: Eindeutiger Name der Regel
+            category: Kategorie (content_selection, lexicalization, discourse, syntax)
+            utility: Statische Utility (Präferenz)
+            specificity: Spezifität der Regel
+            metadata: Zusätzliche Metadaten (Tags, Beschreibung, etc.)
+
+        Returns:
+            True wenn erfolgreich, False sonst
+
+        Note:
+            Die Condition/Action Callables können nicht persistiert werden.
+            Diese Methode speichert nur Metadaten und Statistiken.
+            Metadata wird als JSON-String gespeichert.
+        """
+        if not self.driver:
+            logger.error("create_production_rule: Kein DB-Driver verfügbar")
+            return False
+
+        try:
+            import json
+
+            # Serialisiere metadata als JSON-String für Neo4j
+            metadata_json = json.dumps(metadata or {})
+
+            with self.driver.session(database="neo4j") as session:
+                query = """
+                MERGE (pr:ProductionRule {name: $name})
+                SET pr.category = $category,
+                    pr.utility = $utility,
+                    pr.specificity = $specificity,
+                    pr.metadata = $metadata,
+                    pr.application_count = COALESCE(pr.application_count, 0),
+                    pr.success_count = COALESCE(pr.success_count, 0),
+                    pr.created_at = COALESCE(pr.created_at, datetime()),
+                    pr.last_updated = datetime()
+                RETURN pr.name AS name
+                """
+
+                result = session.run(
+                    query,
+                    name=name,
+                    category=category,
+                    utility=utility,
+                    specificity=specificity,
+                    metadata=metadata_json,
+                )
+
+                record = result.single()
+
+                if record:
+                    logger.info(
+                        "ProductionRule erstellt/aktualisiert",
+                        extra={
+                            "name": name,
+                            "category": category,
+                            "utility": utility,
+                            "specificity": specificity,
+                        },
+                    )
+                    return True
+                else:
+                    logger.warning(
+                        "create_production_rule: Regel konnte nicht erstellt werden",
+                        extra={"name": name},
+                    )
+                    return False
+
+        except Exception as e:
+            logger.log_exception(
+                e,
+                "create_production_rule: Fehler",
+                name=name,
+                category=category,
+            )
+            return False
+
+    def get_production_rules(
+        self,
+        category: Optional[str] = None,
+        min_utility: Optional[float] = None,
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Lädt Produktionsregeln aus Neo4j.
+
+        Args:
+            category: Optional - Filtere nach Kategorie
+            min_utility: Optional - Minimale Utility
+            limit: Optional - Maximale Anzahl Regeln
+
+        Returns:
+            Liste von Regel-Dicts mit Metadaten und Statistiken
+        """
+        if not self.driver:
+            logger.error("get_production_rules: Kein DB-Driver verfügbar")
+            return []
+
+        try:
+            with self.driver.session(database="neo4j") as session:
+                # Baue Query dynamisch
+                query_parts = ["MATCH (pr:ProductionRule)"]
+                where_clauses = []
+                params = {}
+
+                if category:
+                    where_clauses.append("pr.category = $category")
+                    params["category"] = category
+
+                if min_utility is not None:
+                    where_clauses.append("pr.utility >= $min_utility")
+                    params["min_utility"] = min_utility
+
+                if where_clauses:
+                    query_parts.append("WHERE " + " AND ".join(where_clauses))
+
+                query_parts.append(
+                    """
+                    RETURN pr.name AS name,
+                           pr.category AS category,
+                           pr.utility AS utility,
+                           pr.specificity AS specificity,
+                           pr.metadata AS metadata,
+                           pr.application_count AS application_count,
+                           pr.success_count AS success_count,
+                           pr.last_applied AS last_applied,
+                           pr.created_at AS created_at,
+                           pr.last_updated AS last_updated
+                    ORDER BY pr.utility DESC, pr.specificity DESC
+                    """
+                )
+
+                if limit:
+                    query_parts.append(f"LIMIT {limit}")
+
+                query = "\n".join(query_parts)
+
+                result = session.run(query, **params)
+
+                import json
+
+                rules = []
+                for record in result:
+                    # Deserialisiere metadata von JSON-String
+                    metadata = {}
+                    if record["metadata"]:
+                        try:
+                            metadata = json.loads(record["metadata"])
+                        except json.JSONDecodeError:
+                            metadata = {}
+
+                    rule_dict = {
+                        "name": record["name"],
+                        "category": record["category"],
+                        "utility": record["utility"],
+                        "specificity": record["specificity"],
+                        "metadata": metadata,
+                        "application_count": record["application_count"] or 0,
+                        "success_count": record["success_count"] or 0,
+                        "last_applied": (
+                            record["last_applied"].isoformat()
+                            if record["last_applied"]
+                            else None
+                        ),
+                        "created_at": (
+                            record["created_at"].isoformat()
+                            if record["created_at"]
+                            else None
+                        ),
+                        "last_updated": (
+                            record["last_updated"].isoformat()
+                            if record["last_updated"]
+                            else None
+                        ),
+                    }
+                    rules.append(rule_dict)
+
+                logger.debug(
+                    f"Loaded {len(rules)} production rules",
+                    extra={"category": category, "min_utility": min_utility},
+                )
+
+                return rules
+
+        except Exception as e:
+            logger.log_exception(
+                e,
+                "get_production_rules: Fehler",
+                category=category,
+                min_utility=min_utility,
+            )
+            return []
+
+    def update_rule_stats(
+        self,
+        rule_name: str,
+        applied: bool = True,
+        success: Optional[bool] = None,
+    ) -> bool:
+        """
+        Aktualisiert die Statistiken einer Produktionsregel.
+
+        Args:
+            rule_name: Name der Regel
+            applied: True wenn Regel angewendet wurde
+            success: Optional - True wenn Regel erfolgreich war
+
+        Returns:
+            True wenn erfolgreich, False sonst
+        """
+        if not self.driver:
+            logger.error("update_rule_stats: Kein DB-Driver verfügbar")
+            return False
+
+        try:
+            with self.driver.session(database="neo4j") as session:
+                # Baue Update-Statements
+                set_clauses = []
+                if applied:
+                    set_clauses.append(
+                        "pr.application_count = pr.application_count + 1"
+                    )
+                    set_clauses.append("pr.last_applied = datetime()")
+
+                if success is not None and success:
+                    set_clauses.append("pr.success_count = pr.success_count + 1")
+
+                if not set_clauses:
+                    # Nichts zu tun
+                    return True
+
+                query = f"""
+                MATCH (pr:ProductionRule {{name: $rule_name}})
+                SET {', '.join(set_clauses)}
+                RETURN pr.name AS name,
+                       pr.application_count AS application_count,
+                       pr.success_count AS success_count
+                """
+
+                result = session.run(query, rule_name=rule_name)
+
+                record = result.single()
+
+                if record:
+                    logger.debug(
+                        "Rule stats updated",
+                        extra={
+                            "name": record["name"],
+                            "applications": record["application_count"],
+                            "successes": record["success_count"],
+                        },
+                    )
+                    return True
+                else:
+                    logger.warning(
+                        "update_rule_stats: Regel nicht gefunden",
+                        extra={"rule_name": rule_name},
+                    )
+                    return False
+
+        except Exception as e:
+            logger.log_exception(
+                e,
+                "update_rule_stats: Fehler",
+                rule_name=rule_name,
+            )
+            return False
+
+    def get_production_rule_statistics(self) -> Dict[str, Any]:
+        """
+        Gibt Statistiken über alle Produktionsregeln zurück.
+
+        Returns:
+            Dict mit Statistiken (Anzahl Regeln, Kategorien, Top-Rules, etc.)
+        """
+        if not self.driver:
+            logger.error("get_production_rule_statistics: Kein DB-Driver verfügbar")
+            return {}
+
+        try:
+            with self.driver.session(database="neo4j") as session:
+                # Gesamtstatistiken
+                stats_query = """
+                MATCH (pr:ProductionRule)
+                RETURN count(pr) AS total_rules,
+                       sum(pr.application_count) AS total_applications,
+                       sum(pr.success_count) AS total_successes,
+                       avg(pr.utility) AS avg_utility,
+                       avg(pr.specificity) AS avg_specificity
+                """
+
+                result = session.run(stats_query)
+                record = result.single()
+
+                if not record or record["total_rules"] == 0:
+                    return {
+                        "total_rules": 0,
+                        "total_applications": 0,
+                        "total_successes": 0,
+                        "categories": {},
+                        "top_rules": [],
+                    }
+
+                # Kategorien-Verteilung
+                category_query = """
+                MATCH (pr:ProductionRule)
+                RETURN pr.category AS category, count(pr) AS count
+                ORDER BY count DESC
+                """
+
+                category_result = session.run(category_query)
+                categories = {r["category"]: r["count"] for r in category_result}
+
+                # Top 10 Regeln (nach Anwendungen)
+                top_rules_query = """
+                MATCH (pr:ProductionRule)
+                WHERE pr.application_count > 0
+                RETURN pr.name AS name,
+                       pr.category AS category,
+                       pr.application_count AS applications,
+                       pr.success_count AS successes
+                ORDER BY pr.application_count DESC
+                LIMIT 10
+                """
+
+                top_result = session.run(top_rules_query)
+                top_rules = [
+                    {
+                        "name": r["name"],
+                        "category": r["category"],
+                        "applications": r["applications"],
+                        "successes": r["successes"],
+                    }
+                    for r in top_result
+                ]
+
+                stats = {
+                    "total_rules": record["total_rules"],
+                    "total_applications": record["total_applications"] or 0,
+                    "total_successes": record["total_successes"] or 0,
+                    "avg_utility": record["avg_utility"] or 0.0,
+                    "avg_specificity": record["avg_specificity"] or 0.0,
+                    "categories": categories,
+                    "top_rules": top_rules,
+                }
+
+                logger.debug("Production rule statistics retrieved", extra=stats)
+
+                return stats
+
+        except Exception as e:
+            logger.log_exception(e, "get_production_rule_statistics: Fehler")
+            return {}

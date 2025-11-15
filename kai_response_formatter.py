@@ -41,6 +41,7 @@ class KaiResponse:
     confidence: Optional[float] = None
     strategy: Optional[str] = None
     evaluation: Optional[Any] = None  # EvaluationResult
+    proof_tree: Optional[Any] = None  # PHASE 6: ProofTree für Transparenz
 
 
 class KaiResponseFormatter:
@@ -466,6 +467,191 @@ class KaiResponseFormatter:
 
         return f"Ich habe leider keine Informationen über die Gründe oder Ursachen von '{topic}'. Ich kenne '{topic}' nicht im kausalen Zusammenhang."
 
+    def generate_with_production_system(
+        self,
+        topic: str,
+        facts: Dict[str, List[str]],
+        bedeutungen: List[str],
+        synonyms: List[str],
+        query_type: str = "normal",
+        confidence: Optional[float] = None,
+        production_engine: Optional[Any] = None,
+        signals: Optional[Any] = None,
+    ) -> KaiResponse:
+        """
+        Generiert Antwort mit Production System (statt Pipeline).
+
+        PHASE 5: Integration mit ResponseFormatter
+
+        Args:
+            topic: Das Thema der Frage
+            facts: Dictionary mit Relationstypen und Objekten
+            bedeutungen: Liste von Bedeutungen/Definitionen
+            synonyms: Liste von Synonymen
+            query_type: Typ der Query
+            confidence: Optionale Konfidenz
+            production_engine: Optional ProductionSystemEngine Instanz
+            signals: Optional KaiSignals für UI-Updates (PHASE 5)
+
+        Returns:
+            KaiResponse mit Production-System generiertem Text
+        """
+        import time
+
+        from component_54_production_system import (
+            GenerationGoal,
+            GenerationGoalType,
+            ProductionSystemEngine,
+            ResponseGenerationState,
+            create_all_content_selection_rules,
+        )
+
+        start_time = time.time()
+
+        try:
+            # 1. Erstelle Production Engine (falls nicht gegeben)
+            if production_engine is None:
+                production_engine = ProductionSystemEngine(signals=signals)
+                # Füge Standard-Regeln hinzu
+                production_engine.add_rules(create_all_content_selection_rules())
+                # TODO: Füge Lexicalization-Regeln hinzu in späteren Phasen
+
+            # 2. Konvertiere facts/bedeutungen in available_facts Format
+            available_facts = []
+
+            # Bedeutungen als Fakten
+            for bed in bedeutungen:
+                available_facts.append(
+                    {
+                        "relation_type": "DEFINITION",  # PHASE 6 FIX: relation -> relation_type
+                        "subject": topic,
+                        "object": bed,
+                        "confidence": confidence or 0.9,
+                        "source": "direct",
+                    }
+                )
+
+            # Synonyme als Fakten
+            for syn in synonyms:
+                available_facts.append(
+                    {
+                        "relation_type": "SYNONYM",  # PHASE 6 FIX: relation -> relation_type
+                        "subject": topic,
+                        "object": syn,
+                        "confidence": confidence or 0.85,
+                        "source": "direct",
+                    }
+                )
+
+            # Andere Fakten
+            for relation_type, objects in facts.items():
+                for obj in objects:
+                    available_facts.append(
+                        {
+                            "relation_type": relation_type,  # PHASE 6 FIX: relation -> relation_type
+                            "subject": topic,
+                            "object": obj,
+                            "confidence": confidence or 0.8,
+                            "source": "graph",
+                        }
+                    )
+
+            # 3. Erstelle initialen State
+            primary_goal = GenerationGoal(
+                goal_type=GenerationGoalType.ANSWER_QUESTION,
+                target_entity=topic,
+                constraints={"query_type": query_type},
+            )
+
+            state = ResponseGenerationState(
+                primary_goal=primary_goal,
+                available_facts=available_facts,
+                constraints={"max_sentences": 5 if query_type == "normal" else 10},
+                current_query=f"Generiere Antwort für: {topic}",  # PHASE 6: Query für ProofTree
+            )
+
+            # 4. Generiere Antwort
+            final_state = production_engine.generate(state)
+
+            # 5. Extrahiere Ergebnis
+            generated_text = final_state.get_full_text()
+
+            # PHASE 6: Extrahiere ProofTree
+            proof_tree = final_state.proof_tree
+
+            # 6. Erstelle Trace
+            trace = [
+                "Production System Generierung gestartet",
+                f"Ziel: {primary_goal.goal_type.value}",
+                f"Verfügbare Fakten: {len(available_facts)}",
+                f"Cycles: {final_state.cycle_count}",
+                f"Generierte Sätze: {len(final_state.text.completed_sentences)}",
+            ]
+
+            # 7. Berechne durchschnittliche Confidence aus verwendeten Fakten
+            if available_facts:
+                avg_confidence = sum(
+                    f.get("confidence", 0.5) for f in available_facts
+                ) / len(available_facts)
+            else:
+                avg_confidence = confidence or 0.5
+
+            # 8. Response Time
+            response_time = time.time() - start_time
+            trace.append(f"Generierungszeit: {response_time:.3f}s")
+
+            # PHASE 6: Füge ProofTree-Info zum Trace hinzu
+            if proof_tree:
+                num_steps = len(proof_tree.get_all_steps())
+                trace.append(f"ProofTree: {num_steps} Regelanwendungen")
+
+            # PHASE 6: Optional - Emit ProofTree Signal für UI
+            if (
+                signals is not None
+                and hasattr(signals, "proof_tree_update")
+                and proof_tree
+            ):
+                try:
+                    signals.proof_tree_update.emit(proof_tree)
+                    logger.debug("ProofTree signal emitted for UI update")
+                except Exception as e:
+                    logger.debug(f"Could not emit proof_tree_update signal: {e}")
+
+            # 9. Erstelle KaiResponse
+            response = KaiResponse(
+                text=(
+                    generated_text
+                    if generated_text
+                    else f"Keine Antwort generiert für '{topic}'."
+                ),
+                trace=trace,
+                confidence=avg_confidence,
+                strategy="production_system",
+                proof_tree=proof_tree,  # PHASE 6: ProofTree inkludieren
+            )
+
+            logger.info(
+                f"Production System generated response | cycles={final_state.cycle_count}, "
+                f"sentences={len(final_state.text.completed_sentences)}, time={response_time:.3f}s"
+            )
+
+            return response
+
+        except Exception as e:
+            logger.error(f"Error in production system generation: {e}", exc_info=True)
+
+            # Fallback auf Pipeline
+            fallback_text = self.format_standard_answer(
+                topic, facts, bedeutungen, synonyms, query_type, confidence=confidence
+            )
+
+            return KaiResponse(
+                text=fallback_text,
+                trace=[f"Production System failed: {e}", "Fallback to pipeline"],
+                confidence=confidence or 0.5,
+                strategy="pipeline_fallback",
+            )
+
     def format_standard_answer(
         self,
         topic: str,
@@ -806,4 +992,255 @@ class KaiResponseFormatter:
             "\n".join(response_parts)
             if response_parts
             else "Keine räumliche Antwort verfügbar."
+        )
+
+
+# ============================================================================
+# Response Generation Router (A/B Testing)
+# ============================================================================
+
+
+class ResponseGenerationRouter:
+    """
+    Router für A/B Testing zwischen Pipeline und Production System.
+
+    PHASE 5: A/B Testing Infrastructure
+
+    Funktionen:
+    - Entscheidet welches System für eine Query verwendet wird
+    - Initial: 50/50 Random Split
+    - Später: Meta-Learning basierte Auswahl
+    - Trackt System-Verwendung für Performance-Analyse
+    """
+
+    def __init__(
+        self,
+        formatter: KaiResponseFormatter,
+        production_system_weight: float = 0.5,
+        enable_meta_learning: bool = False,
+        meta_engine: Optional[Any] = None,
+    ):
+        """
+        Args:
+            formatter: KaiResponseFormatter Instanz
+            production_system_weight: Wahrscheinlichkeit für Production System (0.0-1.0)
+            enable_meta_learning: Nutze Meta-Learning für Routing-Entscheidung
+            meta_engine: Optional MetaLearningEngine Instanz
+        """
+        self.formatter = formatter
+        self.production_weight = production_system_weight
+        self.enable_meta_learning = enable_meta_learning
+        self.meta_engine = meta_engine
+
+        # Tracking
+        from collections import defaultdict
+
+        self.system_usage_counts: Dict[str, int] = defaultdict(int)
+        self.total_queries: int = 0
+
+        logger.info(
+            f"ResponseGenerationRouter initialized | "
+            f"production_weight={production_system_weight:.0%}, "
+            f"meta_learning={'enabled' if enable_meta_learning else 'disabled'}"
+        )
+
+    def route_to_system(
+        self,
+        query: str,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> str:
+        """
+        Entscheidet welches System verwendet werden soll.
+
+        Args:
+            query: User Query
+            context: Optional Context Dict
+
+        Returns:
+            "pipeline" oder "production"
+        """
+        import random
+
+        self.total_queries += 1
+
+        # MODE 1: Meta-Learning basierte Auswahl (wenn aktiviert)
+        if self.enable_meta_learning and self.meta_engine:
+            # Nutze Meta-Engine um beste "System-Strategy" zu wählen
+            system = self._select_via_meta_learning(query, context)
+
+        # MODE 2: Random A/B Split (default)
+        else:
+            rand = random.random()
+            system = "production" if rand < self.production_weight else "pipeline"
+
+        # Track usage
+        self.system_usage_counts[system] += 1
+
+        logger.debug(
+            f"Routed to {system} system | "
+            f"total={self.total_queries}, "
+            f"production={self.system_usage_counts['production']}, "
+            f"pipeline={self.system_usage_counts['pipeline']}"
+        )
+
+        return system
+
+    def _select_via_meta_learning(
+        self, query: str, context: Optional[Dict[str, Any]]
+    ) -> str:
+        """
+        Nutze Meta-Learning Engine für System-Auswahl.
+
+        Behandelt "pipeline" und "production" wie zwei Reasoning-Strategien.
+
+        Returns:
+            "pipeline" oder "production"
+        """
+        try:
+            # Nutze MetaLearningEngine.select_best_strategy
+            # mit "pipeline" und "production" als verfügbare Strategien
+            available_systems = ["pipeline", "production"]
+
+            best_system, confidence = self.meta_engine.select_best_strategy(
+                query, context, available_strategies=available_systems
+            )
+
+            logger.debug(
+                f"Meta-learning selected {best_system} with confidence {confidence:.2f}"
+            )
+
+            return best_system
+
+        except Exception as e:
+            logger.warning(f"Meta-learning routing failed: {e}, falling back to random")
+            import random
+
+            return "production" if random.random() < 0.5 else "pipeline"
+
+    def generate_response(
+        self,
+        topic: str,
+        facts: Dict[str, List[str]],
+        bedeutungen: List[str],
+        synonyms: List[str],
+        query: str,
+        query_type: str = "normal",
+        confidence: Optional[float] = None,
+        context: Optional[Dict[str, Any]] = None,
+        production_engine: Optional[Any] = None,
+    ) -> KaiResponse:
+        """
+        Generiert Response mit automatischem Routing.
+
+        Args:
+            topic, facts, bedeutungen, synonyms: Standard Response-Formatter Args
+            query: Original-Query (für Routing)
+            query_type: Typ der Query
+            confidence: Optional Confidence
+            context: Optional Context
+            production_engine: Optional ProductionSystemEngine
+
+        Returns:
+            KaiResponse (mit strategy="pipeline" oder "production_system")
+        """
+        import time
+
+        start_time = time.time()
+
+        # 1. Routing-Entscheidung
+        system = self.route_to_system(query, context)
+
+        # 2. Generiere mit gewähltem System
+        if system == "production":
+            response = self.formatter.generate_with_production_system(
+                topic=topic,
+                facts=facts,
+                bedeutungen=bedeutungen,
+                synonyms=synonyms,
+                query_type=query_type,
+                confidence=confidence,
+                production_engine=production_engine,
+            )
+        else:  # pipeline
+            response_text = self.formatter.format_standard_answer(
+                topic=topic,
+                facts=facts,
+                bedeutungen=bedeutungen,
+                synonyms=synonyms,
+                query_type=query_type,
+                confidence=confidence,
+            )
+
+            response = KaiResponse(
+                text=response_text,
+                trace=[f"Pipeline System Generierung", f"Query Type: {query_type}"],
+                confidence=confidence or 0.8,
+                strategy="pipeline",
+            )
+
+        # 3. Füge Routing-Info zum Trace hinzu
+        response_time = time.time() - start_time
+        response.trace.insert(
+            0,
+            f"Routing: {system} system gewählt (A/B split={self.production_weight:.0%})",
+        )
+        response.trace.append(f"Total Zeit: {response_time:.3f}s")
+
+        # 4. Record für Meta-Learning (wenn aktiviert)
+        if self.enable_meta_learning and self.meta_engine:
+            result = {
+                "confidence": response.confidence,
+                "system": system,
+                "response_time": response_time,
+            }
+
+            self.meta_engine.record_strategy_usage(
+                strategy=system,  # Behandle system wie strategy
+                query=query,
+                result=result,
+                response_time=response_time,
+                context=context,
+            )
+
+        return response
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        Gibt Routing-Statistiken zurück.
+
+        Returns:
+            Dict mit System-Usage-Counts und Percentages
+        """
+        stats = {
+            "total_queries": self.total_queries,
+            "system_usage": dict(self.system_usage_counts),
+            "production_weight": self.production_weight,
+            "meta_learning_enabled": self.enable_meta_learning,
+        }
+
+        if self.total_queries > 0:
+            stats["production_percentage"] = (
+                self.system_usage_counts["production"] / self.total_queries
+            ) * 100
+            stats["pipeline_percentage"] = (
+                self.system_usage_counts["pipeline"] / self.total_queries
+            ) * 100
+
+        return stats
+
+    def set_production_weight(self, weight: float) -> None:
+        """
+        Ändert Production System Weight.
+
+        Args:
+            weight: Neue Wahrscheinlichkeit (0.0-1.0)
+        """
+        if not 0.0 <= weight <= 1.0:
+            raise ValueError("Weight must be between 0.0 and 1.0")
+
+        old_weight = self.production_weight
+        self.production_weight = weight
+
+        logger.info(
+            f"Production system weight changed: {old_weight:.0%} -> {weight:.0%}"
         )

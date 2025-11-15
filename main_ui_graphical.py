@@ -101,6 +101,28 @@ except ImportError:
         "[UI] ResonanceViewWidget nicht verfügbar - Resonance-View-Tab wird nicht angezeigt"
     )
 
+# Import ProductionTraceWidget (with fallback) - PHASE 8.2
+try:
+    from component_55_production_trace_widget import ProductionTraceWidget
+
+    PRODUCTION_TRACE_AVAILABLE = True
+except ImportError:
+    PRODUCTION_TRACE_AVAILABLE = False
+    print(
+        "[UI] ProductionTraceWidget nicht verfügbar - Production-Trace-Tab wird nicht angezeigt"
+    )
+
+# Import ABTestingDashboard (with fallback) - PHASE 8.3
+try:
+    from component_56_ab_testing_dashboard import ABTestingDashboard
+
+    AB_TESTING_DASHBOARD_AVAILABLE = True
+except ImportError:
+    AB_TESTING_DASHBOARD_AVAILABLE = False
+    print(
+        "[UI] ABTestingDashboard nicht verfügbar - A/B-Testing-Tab wird nicht angezeigt"
+    )
+
 
 class PlanMonitor(QWidget):
     """Zeigt das Hauptziel und eine dynamische Liste von Unterzielen an."""
@@ -665,6 +687,37 @@ class InnerPictureDisplay(QWidget):
         """PHASE 2: Update trace from formatted string (Working Memory)"""
         self.trace_view.setText(trace_str)
 
+    @Slot(str, str)
+    def update_production_trace(self, rule_name: str, description: str):
+        """
+        PHASE 5: Update trace with Production System rule applications.
+
+        Formatiert Regelanwendungen des Production Systems und fügt sie
+        zum bestehenden Trace hinzu.
+
+        Args:
+            rule_name: Name der angewendeten Regel
+            description: Beschreibung der Regelanwendung
+        """
+        current_text = self.trace_view.toPlainText()
+
+        # Formatiere Production System Eintrag
+        production_entry = f"[PRODUCTION] {rule_name}: {description}"
+
+        # Füge zum bestehenden Trace hinzu (wenn vorhanden)
+        if current_text and current_text.strip():
+            updated_text = current_text + "\n" + production_entry
+        else:
+            updated_text = production_entry
+
+        self.trace_view.setText(updated_text)
+
+        # Auto-scroll zum Ende
+        cursor = self.trace_view.textCursor()
+        cursor.movePosition(cursor.MoveOperation.End)
+        self.trace_view.setTextCursor(cursor)
+        self.trace_view.ensureCursorVisible()
+
 
 # --- Separates Analyse-Fenster (ausgelagert) ---
 
@@ -725,6 +778,20 @@ class AnalysisWindow(QMainWindow):
             self.tab_widget.addTab(self.resonance_view_widget, "Resonance View")
         else:
             self.resonance_view_widget = None  # type: ignore[assignment]
+
+        # Tab 7: Production Trace (only if available) - PHASE 8.2
+        if PRODUCTION_TRACE_AVAILABLE:
+            self.production_trace_widget = ProductionTraceWidget()
+            self.tab_widget.addTab(self.production_trace_widget, "Regelanwendungen")
+        else:
+            self.production_trace_widget = None  # type: ignore[assignment]
+
+        # Tab 8: A/B Testing Dashboard (only if available) - PHASE 8.3
+        if AB_TESTING_DASHBOARD_AVAILABLE:
+            self.ab_testing_dashboard = ABTestingDashboard(meta_learning_engine=None)
+            self.tab_widget.addTab(self.ab_testing_dashboard, "A/B Testing")
+        else:
+            self.ab_testing_dashboard = None  # type: ignore[assignment]
 
 
 # --- Hauptfenster ---
@@ -1019,6 +1086,17 @@ class MainWindow(QMainWindow):
         signals.inner_picture_update.connect(
             self.analysis_window.inner_picture.update_trace_from_string
         )
+
+        # Production System Trace (PHASE 5: Production System Integration)
+        signals.production_system_trace.connect(
+            self.analysis_window.inner_picture.update_production_trace
+        )
+
+        # Production System Trace Widget (PHASE 8.2)
+        if PRODUCTION_TRACE_AVAILABLE and self.analysis_window.production_trace_widget:
+            signals.production_system_trace.connect(
+                self.analysis_window.production_trace_widget.add_trace_entry
+            )
 
         # Proof Tree
         if PROOF_TREE_AVAILABLE and self.analysis_window.proof_tree_widget:

@@ -1,6 +1,6 @@
 [flake8]
 max-line-length = 88
-extend-ignore = E203, W503, E306, E501, F541, F841 
+extend-ignore = E501, E203, W503, F541, F841, E712
 exclude =
     .git,
     __pycache__,
@@ -11,3 +11,5 @@ exclude =
     dist
 per-file-ignores =
     __init__.py: F401
+    tests/*.py: E402
+    kai_sub_goal_executor.py: E402

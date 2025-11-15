@@ -284,7 +284,7 @@ class TestDocumentParserFactory:
         """Test parser creation is case-insensitive."""
         parser_lower = DocumentParserFactory.create_parser("document.pdf")
         parser_upper = DocumentParserFactory.create_parser("document.PDF")
-        assert type(parser_lower) == type(parser_upper)
+        assert type(parser_lower) is type(parser_upper)
 
     def test_create_parser_no_extension(self):
         """Test parser creation with file without extension."""
@@ -502,7 +502,7 @@ class TestIntegration:
         # Verify correct types
         assert isinstance(pdf_parser, PdfParser)
         assert isinstance(docx_parser, DocxParser)
-        assert type(pdf_parser) != type(docx_parser)
+        assert type(pdf_parser) is not type(docx_parser)
 
 
 if __name__ == "__main__":

@@ -355,6 +355,7 @@ class TestGoalPlanner:
         """Testet Verhalten bei ungültigem MeaningPoint."""
         from component_4_goal_planner import GoalPlanner
         from component_5_linguistik_strukturen import (
+            GoalType,
             MeaningPoint,
             MeaningPointCategory,
             Modality,

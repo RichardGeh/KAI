@@ -7,7 +7,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "KAI - Kognitive Artificial Intelligence"
-version = "0.0.03"
+version = "0.01.03"
 description = "Self-learning AI that acquires knowledge autonomously from text with transparent reasoning"
 readme = "README.md"
 requires-python = ">=3.13"

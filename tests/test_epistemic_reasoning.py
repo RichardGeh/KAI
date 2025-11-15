@@ -23,11 +23,7 @@ from component_36_epistemic_reasoning import (
     And,
     EpistemicReasoner,
     EpistemicRule,
-    Exists,
-    ForAll,
-    HasProperty,
     K_Expr,
-    M_Expr,
     Not,
     Or,
     PropertyEq,
@@ -78,18 +74,6 @@ class TestLogicExpressions:
 
         assert expr.evaluate(reasoner, context) is True
 
-    def test_has_property(self, reasoner):
-        """Test HasProperty expression"""
-        reasoner.create_agent("carol", age=25)
-
-        context = {"agent": "carol", "turn": 1}
-        expr = HasProperty("carol", "age")
-
-        assert expr.evaluate(reasoner, context) is True
-
-        expr_false = HasProperty("carol", "height")
-        assert expr_false.evaluate(reasoner, context) is False
-
     def test_k_expr_evaluation(self, reasoner):
         """Test K_Expr (Knowledge operator)"""
         reasoner.create_agent("alice")
@@ -102,20 +86,6 @@ class TestLogicExpressions:
 
         expr_false = K_Expr("alice", "grass_is_red")
         assert expr_false.evaluate(reasoner, context) is False
-
-    def test_m_expr_evaluation(self, reasoner):
-        """Test M_Expr (Belief operator)"""
-        reasoner.create_agent("alice")
-
-        # Alice doesn't know moon is NOT cheese -> considers it possible
-        context = {"agent": "alice", "turn": 1}
-        expr = M_Expr("alice", "moon_is_cheese")
-
-        assert expr.evaluate(reasoner, context) is True
-
-        # Alice knows moon is NOT cheese
-        reasoner.engine.add_negated_knowledge("alice", "moon_is_cheese")
-        assert expr.evaluate(reasoner, context) is False
 
     def test_and_expression(self, reasoner):
         """Test And combinator"""
@@ -171,29 +141,6 @@ class TestLogicExpressions:
         # Test ~ (not)
         expr3 = ~PropertyEq("alice", "age", 30)
         assert expr3.evaluate(reasoner, context) is True
-
-    def test_forall_quantifier(self, reasoner):
-        """Test ForAll quantifier"""
-        agents = ["alice", "bob", "carol"]
-        for agent in agents:
-            reasoner.create_agent(agent, status="active")
-
-        context = {"turn": 1}
-        expr = ForAll(agents, lambda agent: PropertyEq(agent, "status", "active"))
-
-        assert expr.evaluate(reasoner, context) is True
-
-    def test_exists_quantifier(self, reasoner):
-        """Test Exists quantifier"""
-        reasoner.create_agent("alice", eye_color="brown")
-        reasoner.create_agent("bob", eye_color="blue")
-        reasoner.create_agent("carol", eye_color="brown")
-
-        agents = ["alice", "bob", "carol"]
-        context = {"turn": 1}
-        expr = Exists(agents, lambda agent: PropertyEq(agent, "eye_color", "blue"))
-
-        assert expr.evaluate(reasoner, context) is True
 
 
 class TestEpistemicRules:

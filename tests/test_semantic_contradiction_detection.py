@@ -457,12 +457,12 @@ def test_ontology_generator_finds_siblings(engine):
 
     # tier und pflanze sind Geschwister (beide Kinder von lebewesen)
     assert (
-        generator.are_concepts_mutually_exclusive("tier", "pflanze") == True
+        generator.are_concepts_mutually_exclusive("tier", "pflanze") is True
     ), "tier und pflanze sollten als Geschwister erkannt werden"
 
     # tier und säugetier sind NICHT Geschwister (hierarchisch)
     assert (
-        generator.are_concepts_mutually_exclusive("tier", "säugetier") == False
+        generator.are_concepts_mutually_exclusive("tier", "säugetier") is False
     ), "tier und säugetier sollten NICHT als Geschwister erkannt werden"
 
     print("[OK] OntologyConstraintGenerator findet Geschwister korrekt")

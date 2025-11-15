@@ -235,6 +235,32 @@ class TextNormalizer:
                         )
                         return word
 
+                    # WICHTIG: Verben nicht als Plurale behandeln
+                    # Infinitive enden oft auf "-en" (fliegen, laufen, schwimmen)
+                    # Diese sollten NICHT durch regelbasierte Plural-Normalisierung laufen
+                    if token.pos_ in ["VERB", "AUX"]:
+                        # Verwende Lemma wenn verfügbar, sonst Original
+                        result_lemma = (
+                            lemma.lower() if lemma and len(lemma) >= 2 else word
+                        )
+
+                        # Sanity check: Wenn Lemma länger als Original oder sieht falsch aus, nutze Original
+                        # (spaCy kann bei falschen POS-Tags falsche Lemmas erzeugen)
+                        if (
+                            len(result_lemma) > len(word)
+                            or result_lemma.endswith("en")
+                            and not word.endswith("en")
+                        ):
+                            logger.debug(
+                                f"Verb erkannt, aber Lemma sieht falsch aus: '{word}' -> '{result_lemma}' (nutze Original)"
+                            )
+                            return word
+
+                        logger.debug(
+                            f"Verb erkannt: '{word}' -> '{result_lemma}' (POS: {token.pos_}, keine Plural-Normalisierung)"
+                        )
+                        return result_lemma
+
                     # Nur verwenden wenn das Lemma sich unterscheidet und sinnvoll aussieht
                     if lemma and lemma != word and len(lemma) >= 2:
                         logger.debug(f"spaCy lemmatization: '{word}' -> '{lemma}'")

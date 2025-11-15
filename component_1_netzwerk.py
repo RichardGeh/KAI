@@ -18,6 +18,7 @@ from component_1_netzwerk_core import INFO_TYPE_ALIASES, KonzeptNetzwerkCore
 from component_1_netzwerk_feedback import KonzeptNetzwerkFeedback
 from component_1_netzwerk_memory import KonzeptNetzwerkMemory
 from component_1_netzwerk_patterns import KonzeptNetzwerkPatterns
+from component_1_netzwerk_production_rules import KonzeptNetzwerkProductionRules
 from component_1_netzwerk_word_usage import KonzeptNetzwerkWordUsage
 
 
@@ -41,11 +42,14 @@ class KonzeptNetzwerk:
         # Initialize core (creates driver and connection)
         self._core = KonzeptNetzwerkCore(uri, user, password)
 
-        # Initialize patterns, memory, word usage, and feedback with the driver
+        # Initialize patterns, memory, word usage, feedback, and production rules with the driver
         self._patterns = KonzeptNetzwerkPatterns(self._core.driver)
         self._memory = KonzeptNetzwerkMemory(self._core.driver)
         self._word_usage = KonzeptNetzwerkWordUsage(self._core.driver)
         self._feedback = KonzeptNetzwerkFeedback(self._core.driver)
+        self._production_rules = KonzeptNetzwerkProductionRules(
+            self._core.driver
+        )  # PHASE 9
 
         # Create constraints for word usage and feedback
         self._word_usage._create_constraints()
@@ -64,6 +68,7 @@ class KonzeptNetzwerk:
         self._memory.driver = value
         self._word_usage.driver = value
         self._feedback.driver = value
+        self._production_rules.driver = value
 
     def close(self):
         """Close the database connection."""
@@ -459,6 +464,63 @@ class KonzeptNetzwerk:
         return self._core.add_meta_belief(
             observer_id, subject_id, proposition, meta_level
         )
+
+    # ========== PRODUCTION RULE METHODS (PHASE 9) ==========
+    # Delegate to KonzeptNetzwerkProductionRules
+
+    def create_production_rule(
+        self,
+        name: str,
+        category: str,
+        condition_code: str,
+        action_code: str,
+        utility: float = 1.0,
+        specificity: float = 1.0,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> bool:
+        """Create or update a production rule in Neo4j."""
+        return self._production_rules.create_production_rule(
+            name, category, condition_code, action_code, utility, specificity, metadata
+        )
+
+    def get_production_rule(self, name: str) -> Optional[Dict[str, Any]]:
+        """Load a production rule from Neo4j."""
+        return self._production_rules.get_production_rule(name)
+
+    def get_all_production_rules(self) -> List[Dict[str, Any]]:
+        """Load all production rules from Neo4j."""
+        return self._production_rules.get_all_production_rules()
+
+    def update_production_rule_stats(
+        self,
+        name: str,
+        application_count: Optional[int] = None,
+        success_count: Optional[int] = None,
+        last_applied: Optional[Any] = None,
+        force_sync: bool = False,
+    ) -> bool:
+        """Update statistics for a production rule."""
+        return self._production_rules.update_production_rule_stats(
+            name, application_count, success_count, last_applied, force_sync
+        )
+
+    def query_production_rules(
+        self,
+        category: Optional[str] = None,
+        min_utility: Optional[float] = None,
+        max_utility: Optional[float] = None,
+        min_application_count: Optional[int] = None,
+        order_by: str = "priority",
+        limit: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Query production rules with filtering and sorting."""
+        return self._production_rules.query_production_rules(
+            category, min_utility, max_utility, min_application_count, order_by, limit
+        )
+
+    def get_production_rule_statistics(self) -> Dict[str, Any]:
+        """Get aggregated statistics about all production rules."""
+        return self._production_rules.get_rule_statistics()
 
 
 # Export INFO_TYPE_ALIASES for backward compatibility

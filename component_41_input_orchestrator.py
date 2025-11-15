@@ -197,14 +197,105 @@ class InputOrchestrator:
             },
         }
 
+    def _merge_abbreviations(self, segments: List[str]) -> List[str]:
+        """
+        Merge abbreviations (e.g., "Dr.") with the following segment.
+
+        SpaCy sometimes splits abbreviations as separate sentences.
+        This post-processing step merges them back.
+
+        Args:
+            segments: List of text segments
+
+        Returns:
+            Merged segments with abbreviations combined
+        """
+        # Common German abbreviations that should be merged
+        abbreviations = [
+            "dr.",
+            "prof.",
+            "mr.",
+            "mrs.",
+            "ms.",
+            "st.",
+            "ca.",
+            "z.b.",
+            "d.h.",
+            "bzw.",
+            "usw.",
+            "etc.",
+        ]
+
+        merged = []
+        i = 0
+        while i < len(segments):
+            segment = segments[i]
+
+            # Check if this is a short segment ending with "." (likely abbreviation)
+            is_abbrev = (
+                len(segment) <= 5
+                and segment.endswith(".")
+                and segment.lower() in abbreviations
+            )
+
+            # If abbreviation and there's a next segment, merge them
+            if is_abbrev and i + 1 < len(segments):
+                merged_segment = segment + " " + segments[i + 1]
+                merged.append(merged_segment)
+                i += 2  # Skip next segment as it was merged
+                logger.debug(
+                    f"Merged abbreviation: '{segment}' + '{segments[i-1]}' -> '{merged_segment}'"
+                )
+            else:
+                merged.append(segment)
+                i += 1
+
+        return merged
+
     def _segment_text(self, text: str) -> List[str]:
         """
-        Segmentiert Text in Sätze und Absätze.
+        Segmentiert Text in Sätze mit spaCy's Sentence Tokenizer.
 
         Strategie:
-        1. Splitte an Absätzen (doppelte Zeilenumbrüche)
-        2. Splitte an Satzgrenzen (., !, ?)
-        3. Behalte Fragezeichen bei Fragen
+        1. Primär: spaCy Sentence Tokenizer (präzise, handled Dr., Zahlen, etc.)
+        2. Fallback: Regex-basierte Segmentierung wenn spaCy nicht verfügbar
+
+        Args:
+            text: Der zu segmentierende Text
+
+        Returns:
+            Liste von Text-Segmenten
+        """
+        # Strategie 1: spaCy Sentence Tokenizer (bevorzugt)
+        if self.preprocessor and hasattr(self.preprocessor, "nlp"):
+            try:
+                doc = self.preprocessor.process(text)
+                segments = [
+                    sent.text.strip() for sent in doc.sents if sent.text.strip()
+                ]
+
+                # Post-processing: Merge abbreviations (like "Dr.") with next segment
+                segments = self._merge_abbreviations(segments)
+
+                logger.debug(f"Text mit spaCy segmentiert: {len(segments)} Segmente")
+                return segments
+            except Exception as e:
+                logger.warning(
+                    f"spaCy Segmentierung fehlgeschlagen, nutze Regex-Fallback: {e}"
+                )
+                # Falle durch zu Fallback
+
+        # Strategie 2: Regex-Fallback (wenn spaCy nicht verfügbar)
+        return self._segment_text_regex(text)
+
+    def _segment_text_regex(self, text: str) -> List[str]:
+        """
+        Fallback: Regex-basierte Segmentierung (wenn spaCy nicht verfügbar).
+
+        WARNUNG: Diese Methode hat Schwächen bei:
+        - Abkürzungen (Dr., Prof., etc.)
+        - Dezimalzahlen (3.14)
+        - Mehrfachen Satzzeichen (!!!, ???)
 
         Args:
             text: Der zu segmentierende Text
@@ -235,7 +326,7 @@ class InputOrchestrator:
                 if cleaned:
                     segments.append(cleaned)
 
-        logger.debug(f"Text segmentiert: {len(segments)} Segmente")
+        logger.debug(f"Text mit Regex segmentiert: {len(segments)} Segmente")
         return segments
 
     def classify_segment(self, text: str) -> InputSegment:

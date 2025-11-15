@@ -788,6 +788,143 @@ class MetaLearningEngine:
             logger.error("Error loading persisted stats: %s", e)
 
     # ========================================================================
+    # Dual-System Performance Tracking (Pipeline vs. Production System)
+    # PHASE 5: Response Generation A/B Testing
+    # ========================================================================
+
+    def record_generation_system_usage(
+        self,
+        system: str,
+        query: str,
+        confidence: float,
+        response_time: float,
+        response_text: str = "",
+        success: Optional[bool] = None,
+        user_feedback: Optional[str] = None,
+        context: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """
+        Tracked Performance für Generation Systems (Pipeline vs. Production).
+
+        PHASE 5: Dual-System Performance Tracking
+
+        Wrapper um record_strategy_usage() mit zusätzlicher Semantik
+        für Response Generation Systems.
+
+        Args:
+            system: "pipeline" oder "production"
+            query: User-Query
+            confidence: Confidence-Wert (0.0-1.0)
+            response_time: Zeit in Sekunden
+            response_text: Generierter Response-Text (für Variabilitäts-Analyse)
+            success: True/False wenn Feedback vorhanden
+            user_feedback: 'correct', 'incorrect', 'neutral'
+            context: Optional Context Dict
+            metadata: Zusätzliche Metadaten (z.B. cycles, sentences)
+        """
+        if system not in ["pipeline", "production"]:
+            logger.warning(
+                f"Unknown generation system '{system}', expected 'pipeline' or 'production'"
+            )
+            return
+
+        # Erstelle result dict
+        result = {
+            "confidence": confidence,
+            "system": system,
+            "response_time": response_time,
+            "response_length": len(response_text) if response_text else 0,
+        }
+
+        # Füge Metadata hinzu
+        if metadata:
+            result.update(metadata)
+
+        # Nutze existierende record_strategy_usage() Methode
+        # (behandle system als strategy)
+        self.record_strategy_usage(
+            strategy=system,
+            query=query,
+            result=result,
+            response_time=response_time,
+            context=context,
+            user_feedback=user_feedback,
+        )
+
+        logger.debug(
+            f"Recorded {system} system usage | confidence={confidence:.2f}, "
+            f"response_time={response_time:.3f}s, length={len(response_text) if response_text else 0}"
+        )
+
+    def get_generation_system_comparison(self) -> Dict[str, Any]:
+        """
+        Vergleicht Performance zwischen Pipeline und Production System.
+
+        PHASE 5: Dual-System Performance Tracking
+
+        Returns:
+            Dict mit Side-by-Side Vergleich:
+                - queries_count: Anzahl Queries pro System
+                - avg_confidence: Durchschnittliche Confidence
+                - avg_response_time: Durchschnittliche Response-Zeit
+                - success_rate: Success Rate (wenn Feedback vorhanden)
+                - winner: Welches System besser performed
+        """
+        pipeline_stats = self.get_strategy_stats("pipeline", use_cache=False)
+        production_stats = self.get_strategy_stats("production", use_cache=False)
+
+        comparison = {
+            "pipeline": self._format_system_stats(pipeline_stats),
+            "production": self._format_system_stats(production_stats),
+            "comparison": {},
+        }
+
+        # Vergleiche Metriken
+        if pipeline_stats and production_stats:
+            # Winner basierend auf aggregiertem Score
+            pipeline_score = self._calculate_performance_score(pipeline_stats)
+            production_score = self._calculate_performance_score(production_stats)
+
+            comparison["comparison"] = {
+                "confidence_delta": production_stats.avg_confidence
+                - pipeline_stats.avg_confidence,
+                "speed_delta": pipeline_stats.avg_response_time
+                - production_stats.avg_response_time,  # Positiv = Pipeline schneller
+                "success_rate_delta": production_stats.success_rate
+                - pipeline_stats.success_rate,
+                "overall_score_pipeline": pipeline_score,
+                "overall_score_production": production_score,
+                "winner": (
+                    "production" if production_score > pipeline_score else "pipeline"
+                ),
+                "win_margin": abs(production_score - pipeline_score),
+            }
+
+        return comparison
+
+    def _format_system_stats(
+        self, stats: Optional[StrategyPerformance]
+    ) -> Dict[str, Any]:
+        """Formatiert StrategyPerformance für Output"""
+        if stats is None:
+            return {
+                "queries_handled": 0,
+                "success_rate": 0.0,
+                "avg_confidence": 0.0,
+                "avg_response_time": 0.0,
+            }
+
+        return {
+            "queries_handled": stats.queries_handled,
+            "success_count": stats.success_count,
+            "failure_count": stats.failure_count,
+            "success_rate": stats.success_rate,
+            "avg_confidence": stats.avg_confidence,
+            "avg_response_time": stats.avg_response_time,
+        }
+
+    # ========================================================================
     # Utility Functions
     # ========================================================================
 

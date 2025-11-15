@@ -284,6 +284,33 @@ class MeaningPointExtractor:
             logger.error(f"Fehler bei Vektor-Matching: {e}", exc_info=True)
             return []
 
+    def _extract_adjectives_from_noun_phrase(self, text: str, doc: Doc) -> list[str]:
+        """
+        Extrahiert Adjektive aus einer Nomen-Phrase mit spaCy.
+
+        Args:
+            text: Der Text
+            doc: spaCy Doc
+
+        Returns:
+            Liste von Adjektiven (lowercase, lemmatisiert)
+        """
+        adjectives = []
+        try:
+            for token in doc:
+                if token.pos_ == "ADJ":
+                    # Lemmatisiere Adjektiv und füge hinzu
+                    adj_lemma = token.lemma_.lower()
+                    if adj_lemma and len(adj_lemma) > 1:
+                        adjectives.append(adj_lemma)
+                        logger.debug(
+                            f"Adjektiv extrahiert: '{token.text}' -> '{adj_lemma}'"
+                        )
+        except Exception as e:
+            logger.debug(f"Fehler bei Adjektiv-Extraktion: {e}")
+
+        return adjectives
+
     def _extract_arguments_from_text(
         self, text: str, doc: Doc, category: MeaningPointCategory
     ) -> dict[str, Any]:
@@ -504,6 +531,210 @@ class MeaningPointExtractor:
             logger.error(f"Fehler beim Parsen expliziter Befehle: {e}", exc_info=True)
             return []
 
+    def _extract_temporal_markers(self, text: str) -> tuple[list[str], str | None]:
+        """
+        Extrahiert temporale Marker aus Text.
+
+        Args:
+            text: Text der auf temporale Marker geprüft werden soll
+
+        Returns:
+            Tuple von (temporal_markers, temporal_context)
+            - temporal_markers: Liste der gefundenen Zeitmarker
+            - temporal_context: "past", "present", "future" oder None
+        """
+        temporal_markers_map = {
+            # Vergangenheit
+            "gestern": "past",
+            "vorgestern": "past",
+            "letzte woche": "past",
+            "letzten monat": "past",
+            "letztes jahr": "past",
+            "früher": "past",
+            "damals": "past",
+            "einst": "past",
+            "vorher": "past",
+            "zuvor": "past",
+            # Gegenwart
+            "heute": "present",
+            "jetzt": "present",
+            "gerade": "present",
+            "aktuell": "present",
+            "momentan": "present",
+            "derzeit": "present",
+            # Zukunft
+            "morgen": "future",
+            "übermorgen": "future",
+            "nächste woche": "future",
+            "nächsten monat": "future",
+            "nächstes jahr": "future",
+            "später": "future",
+            "bald": "future",
+            "demnächst": "future",
+            "künftig": "future",
+            "zukünftig": "future",
+        }
+
+        text_lower = text.lower()
+        found_markers = []
+        temporal_context = None
+
+        for marker, context in temporal_markers_map.items():
+            if marker in text_lower:
+                found_markers.append(marker)
+                # Setze Context auf den ersten gefundenen Marker
+                if temporal_context is None:
+                    temporal_context = context
+
+        if found_markers:
+            logger.debug(
+                f"Temporal-Marker erkannt: {found_markers} -> Context={temporal_context}"
+            )
+
+        return found_markers, temporal_context
+
+    def _extract_quantifier(self, text: str) -> tuple[str | None, str | None]:
+        """
+        Extrahiert Quantoren aus Text.
+
+        Args:
+            text: Text der auf Quantoren geprüft werden soll
+
+        Returns:
+            Tuple von (quantifier, quantifier_type)
+            - quantifier: Der gefundene Quantor oder None
+            - quantifier_type: "universal", "existential", "majority", "minority", "none" oder None
+        """
+        quantifiers_map = {
+            "alle": "universal",
+            "jeder": "universal",
+            "jede": "universal",
+            "jedes": "universal",
+            "sämtliche": "universal",
+            "manche": "existential",
+            "einige": "existential",
+            "mehrere": "existential",
+            "viele": "majority",
+            "die meisten": "majority",
+            "wenige": "minority",
+            "kaum": "minority",
+            "keine": "none",
+            "kein": "none",
+        }
+
+        text_lower = text.lower()
+
+        for quantifier, q_type in quantifiers_map.items():
+            if rf"\b{quantifier}\b" in text_lower or quantifier in text_lower.split():
+                logger.debug(f"Quantor erkannt: '{quantifier}' -> Type={q_type}")
+                return quantifier, q_type
+
+        return None, None
+
+    def _detect_uncertainty_markers(self, text: str) -> tuple[float, list[str], str]:
+        """
+        Erkennt Unsicherheits-Marker (Hedges) und passt Confidence an.
+
+        Args:
+            text: Text der auf Unsicherheits-Marker geprüft werden soll
+
+        Returns:
+            Tuple von (confidence_multiplier, hedge_words, uncertainty_level)
+            - confidence_multiplier: Faktor zur Reduktion der Confidence (0.0-1.0)
+            - hedge_words: Liste der gefundenen Hedge-Wörter
+            - uncertainty_level: "high", "medium", "low", "none"
+        """
+        hedge_words_map = {
+            "vielleicht": 0.5,  # Sehr unsicher
+            "möglicherweise": 0.5,
+            "eventuell": 0.55,
+            "vermutlich": 0.65,  # Unsicher
+            "wahrscheinlich": 0.7,
+            "anscheinend": 0.7,
+            "scheinbar": 0.65,
+            "meistens": 0.8,  # Etwas unsicher
+            "normalerweise": 0.8,
+            "üblicherweise": 0.8,
+            "oft": 0.75,
+            "häufig": 0.75,
+            "manchmal": 0.6,
+            "selten": 0.6,
+        }
+
+        text_lower = text.lower()
+        found_hedges = []
+        confidence_multiplier = 1.0
+
+        for hedge, multiplier in hedge_words_map.items():
+            if rf"\b{hedge}\b" in text_lower or hedge in text_lower.split():
+                found_hedges.append(hedge)
+                # Nimm den niedrigsten Multiplier wenn mehrere Hedges vorhanden
+                confidence_multiplier = min(confidence_multiplier, multiplier)
+
+        # Bestimme Uncertainty Level
+        if confidence_multiplier <= 0.6:
+            uncertainty_level = "high"
+        elif confidence_multiplier <= 0.75:
+            uncertainty_level = "medium"
+        elif confidence_multiplier < 1.0:
+            uncertainty_level = "low"
+        else:
+            uncertainty_level = "none"
+
+        if found_hedges:
+            logger.debug(
+                f"Uncertainty-Marker erkannt: {found_hedges} -> Multiplier={confidence_multiplier:.2f}, Level={uncertainty_level}"
+            )
+
+        return confidence_multiplier, found_hedges, uncertainty_level
+
+    def _extract_negation(self, text: str) -> tuple[str, Polarity]:
+        """
+        Extrahiert Negation aus Text und bestimmt Polarität.
+
+        Args:
+            text: Text der auf Negation geprüft werden soll
+
+        Returns:
+            Tuple von (bereinigter_text, polarity)
+            - bereinigter_text: Text ohne Negations-Marker
+            - polarity: POSITIVE oder NEGATIVE
+        """
+        negation_markers = [
+            "nicht",
+            "kein",
+            "keine",
+            "keinen",
+            "keinem",
+            "keiner",
+            "niemals",
+            "nie",
+        ]
+
+        text_lower = text.lower()
+        has_negation = any(
+            rf"\b{marker}\b" in text_lower or marker in text_lower.split()
+            for marker in negation_markers
+        )
+
+        # Entferne Negation aus Text für saubere Entity-Extraktion
+        cleaned_text = text
+        if has_negation:
+            for marker in negation_markers:
+                # Entferne Negations-Marker mit Whitespace-Handling
+                cleaned_text = re.sub(
+                    rf"\b{marker}\b\s*", "", cleaned_text, flags=re.IGNORECASE
+                )
+
+        polarity = Polarity.NEGATIVE if has_negation else Polarity.POSITIVE
+
+        if has_negation:
+            logger.debug(
+                f"Negation erkannt: '{text}' -> Polarity={polarity.name}, bereinigt='{cleaned_text.strip()}'"
+            )
+
+        return cleaned_text.strip(), polarity
+
     def _detect_declarative_statements(self, text: str, doc: Doc) -> list[MeaningPoint]:
         """
         Erkennt deklarative Aussagen automatisch und wandelt sie in DEFINITION MeaningPoints um.
@@ -512,9 +743,12 @@ class MeaningPointExtractor:
         Unterstützte Muster:
         - IS_A: "X ist ein/eine Y" -> (X, IS_A, Y)
         - HAS_PROPERTY: "X ist Y" (Adjektiv) -> (X, HAS_PROPERTY, Y)
-        - CAPABLE_OF: "X kann Y" -> (X, CAPABLE_OF, Y)
+        - CAPABLE_OF: "X kann Y" / "X kann nicht Y" -> (X, CAPABLE_OF, Y, polarity)
         - PART_OF: "X hat Y" / "X gehört zu Y" -> (X, PART_OF, Y)
-        - LOCATED_IN: "X liegt in Y" / "X ist in Y" -> (X, LOCATED_IN, Y)
+        - LOCATED_IN: "X liegt in Y" / "X ist in Y" / "X lebt in Y" -> (X, LOCATED_IN, Y)
+
+        NEU: Negation-Behandlung für alle Muster!
+        - "Ein Pinguin kann nicht fliegen" -> (pinguin, CAPABLE_OF, fliegen, polarity=NEGATIVE)
 
         Args:
             text: Der zu analysierende Text
@@ -526,7 +760,7 @@ class MeaningPointExtractor:
         try:
             text_lower = text.lower().strip()
 
-            # Filter: Ignoriere Fragen (beginnen mit Fragewörtern)
+            # Filter 1: Ignoriere Fragen (beginnen mit Fragewörtern)
             question_words = [
                 "was",
                 "wer",
@@ -545,7 +779,101 @@ class MeaningPointExtractor:
             if first_word in question_words:
                 return []
 
-            # Pattern 1: IS_A - "X ist ein/eine Y"
+            # Filter 2: BEHANDLE Konditionale (NICHT ignorieren!)
+            # "Wenn X, dann Y" / "Falls X, (dann) Y" werden jetzt verarbeitet
+            # Pattern: CONDITIONAL - "Wenn X dann Y" / "Falls X, Y"
+            conditional_patterns = [
+                # Pattern mit explizitem "dann" - matcht "Wenn X, dann Y" oder "Wenn X dann Y"
+                (
+                    r"^\s*(?:wenn|falls|sofern)\s+(.+?)\s*,?\s*dann\s+(.+?)\s*\.?\s*$",
+                    "conditional_with_dann",
+                ),
+                # Pattern ohne "dann" - matcht "Wenn X, Y"
+                (
+                    r"^\s*(?:wenn|falls|sofern)\s+(.+?)\s*,\s*(.+?)\s*\.?\s*$",
+                    "conditional_simple",
+                ),
+                # Reversed: "Y, wenn X"
+                (
+                    r"^\s*(.+?),\s+wenn\s+(.+?)\s*\.?\s*$",
+                    "conditional_reversed",
+                ),
+            ]
+
+            for pattern, pattern_type in conditional_patterns:
+                conditional_match = re.match(pattern, text_lower, re.IGNORECASE)
+                if conditional_match:
+                    if pattern_type in ["conditional_with_dann", "conditional_simple"]:
+                        condition_raw = conditional_match.group(1).strip()
+                        consequence_raw = conditional_match.group(2).strip()
+                    else:  # reversed: "Y, wenn X"
+                        consequence_raw = conditional_match.group(1).strip()
+                        condition_raw = conditional_match.group(2).strip()
+
+                    condition = self.text_normalizer.clean_entity(condition_raw)
+                    consequence = self.text_normalizer.clean_entity(consequence_raw)
+
+                    logger.debug(
+                        f"CONDITIONAL erkannt: Wenn '{condition}' dann '{consequence}'"
+                    )
+
+                    # Mittlere Confidence für Konditionale (komplexe Logik)
+                    return [
+                        self._create_meaning_point(
+                            category=MeaningPointCategory.DEFINITION,
+                            cue="auto_detect_conditional",
+                            text_span=text,
+                            confidence=0.82,  # Mittlere-Hohe Confidence
+                            arguments={
+                                "relation_type": "CONDITIONAL",
+                                "condition": condition,
+                                "consequence": consequence,
+                                "condition_raw": condition_raw,
+                                "consequence_raw": consequence_raw,
+                                "auto_detected": True,
+                            },
+                        )
+                    ]
+
+            # Filter 3: BEHANDLE Komparative (NICHT ignorieren!)
+            # "größer als", "schneller als", "besser als" werden jetzt verarbeitet
+            # Pattern: COMPARATIVE - "X ist größer/kleiner/... als Y"
+            comparative_match = re.match(
+                r"^\s*(.+?)\s+ist\s+(größer|kleiner|schneller|langsamer|besser|schlechter|höher|tiefer|länger|kürzer|wertvoller|billiger|mehr|weniger|stärker|schwächer|heller|dunkler|älter|jünger)\s+als\s+(.+?)\s*\.?\s*$",
+                text_lower,
+                re.IGNORECASE,
+            )
+            if comparative_match:
+                subject_raw = comparative_match.group(1).strip()
+                comparison_type = comparative_match.group(2).strip()
+                reference_raw = comparative_match.group(3).strip()
+
+                subject = self.text_normalizer.clean_entity(subject_raw)
+                reference = self.text_normalizer.clean_entity(reference_raw)
+
+                logger.debug(
+                    f"COMPARATIVE erkannt: '{subject}' ist {comparison_type} als '{reference}'"
+                )
+
+                # Hohe Confidence für eindeutige Komparative
+                return [
+                    self._create_meaning_point(
+                        category=MeaningPointCategory.DEFINITION,
+                        cue="auto_detect_comparative",
+                        text_span=text,
+                        confidence=0.88,  # Hohe Confidence
+                        arguments={
+                            "subject": subject,
+                            "relation_type": "COMPARATIVE",
+                            "comparison_type": comparison_type,
+                            "reference": reference,
+                            "auto_detected": True,
+                        },
+                    )
+                ]
+
+            # Pattern 1: IS_A - "X ist ein/eine Y" (mit Adjektiv-Extraktion!)
+            # NEU: Extrahiert auch Adjektive als separate HAS_PROPERTY Relationen
             is_a_match = re.match(
                 r"^\s*(.+?)\s+ist\s+(?:ein|eine|der|die|das)\s+(.+?)\s*\.?\s*$",
                 text_lower,
@@ -557,13 +885,22 @@ class MeaningPointExtractor:
 
                 # Bereinige Entities
                 subject = self.text_normalizer.clean_entity(subject_raw)
-                object_entity = self.text_normalizer.clean_entity(object_raw)
+                object_entity_full = self.text_normalizer.clean_entity(object_raw)
+
+                # NEU: Extrahiere Adjektive und erstelle zusätzliche HAS_PROPERTY Relationen
+                adjectives = self._extract_adjectives_from_noun_phrase(text, doc)
+
+                # Strip adjectives from object to get only the noun
+                object_entity = object_entity_full
+                if adjectives:
+                    # Remove all adjectives from the object string
+                    for adj in adjectives:
+                        object_entity = object_entity.replace(adj, "").strip()
 
                 logger.debug(f"IS_A erkannt: '{subject}' ist ein '{object_entity}'")
 
-                # PHASE 3 (Schritt 3): Hohe Confidence für eindeutige IS_A-Muster mit Artikel
-                # confidence >= 0.85 -> Auto-Save ohne Rückfrage
-                return [
+                # Haupt-IS_A MeaningPoint
+                meaning_points = [
                     self._create_meaning_point(
                         category=MeaningPointCategory.DEFINITION,
                         cue="auto_detect_is_a",
@@ -577,6 +914,28 @@ class MeaningPointExtractor:
                         },
                     )
                 ]
+                if adjectives:
+                    logger.debug(
+                        f"Multi-Object Extraktion: {len(adjectives)} Adjektive gefunden für '{subject}'"
+                    )
+                    for adj in adjectives:
+                        meaning_points.append(
+                            self._create_meaning_point(
+                                category=MeaningPointCategory.DEFINITION,
+                                cue="auto_detect_has_property_from_is_a",
+                                text_span=text,
+                                confidence=0.75,  # Etwas niedrigere Confidence für abgeleitete Properties
+                                arguments={
+                                    "subject": subject,
+                                    "relation_type": "HAS_PROPERTY",
+                                    "object": adj,
+                                    "auto_detected": True,
+                                    "derived_from": "is_a_pattern",
+                                },
+                            )
+                        )
+
+                return meaning_points
 
             # Pattern 2: IS_A (Plural ohne Artikel) - "X sind Y"
             # Behandelt Fälle wie "Katzen sind Tiere", "Hunde sind Säugetiere"
@@ -640,7 +999,8 @@ class MeaningPointExtractor:
                     ]
                 # Sonst: Falle durch zu HAS_PROPERTY (siehe unten)
 
-            # Pattern 3: HAS_PROPERTY - "X ist Y" (ohne Artikel -> Eigenschaft)
+            # Pattern 3: HAS_PROPERTY - "X ist Y" / "X ist nicht Y" (ohne Artikel -> Eigenschaft)
+            # NEU: Negation-Behandlung + Uncertainty-Marker integriert!
             has_property_match = re.match(
                 r"^\s*(.+?)\s+(?:ist|sind)\s+(?!ein|eine|der|die|das)(.+?)\s*\.?\s*$",
                 text_lower,
@@ -657,10 +1017,22 @@ class MeaningPointExtractor:
                     for prep in ["in", "von", "aus", "bei", "zu"]
                 ):
                     subject = self.text_normalizer.clean_entity(subject_raw)
-                    property_value = self.text_normalizer.clean_entity(property_raw)
+
+                    # Extrahiere Negation aus der Eigenschaft
+                    property_cleaned, polarity = self._extract_negation(property_raw)
+                    property_value = self.text_normalizer.clean_entity(property_cleaned)
+
+                    # NEU: Prüfe auf Uncertainty-Marker
+                    (
+                        confidence_multiplier,
+                        hedge_words,
+                        uncertainty_level,
+                    ) = self._detect_uncertainty_markers(text)
+                    base_confidence = 0.78  # Basis-Confidence für HAS_PROPERTY
+                    adjusted_confidence = base_confidence * confidence_multiplier
 
                     logger.debug(
-                        f"HAS_PROPERTY erkannt: '{subject}' ist '{property_value}'"
+                        f"HAS_PROPERTY erkannt: '{subject}' ist '{property_value}' (Polarity={polarity.name}, Confidence={adjusted_confidence:.2f})"
                     )
 
                     # PHASE 3 (Schritt 3): Mittlere Confidence für Eigenschaften (mehrdeutig)
@@ -670,19 +1042,24 @@ class MeaningPointExtractor:
                             category=MeaningPointCategory.DEFINITION,
                             cue="auto_detect_has_property",
                             text_span=text,
-                            confidence=0.78,  # Mittlere Confidence -> triggert Confirmation Gate
+                            polarity=polarity,  # NEU: Polarity wird gesetzt!
+                            confidence=adjusted_confidence,  # NEU: Confidence angepasst durch Uncertainty!
                             arguments={
                                 "subject": subject,
                                 "relation_type": "HAS_PROPERTY",
                                 "object": property_value,
                                 "auto_detected": True,
+                                "negated": polarity == Polarity.NEGATIVE,
+                                "hedge_words": hedge_words,  # NEU: Uncertainty-Marker
+                                "uncertainty_level": uncertainty_level,  # NEU: Uncertainty Level
                             },
                         )
                     ]
 
-            # Pattern 4: CAPABLE_OF - "X kann Y"
+            # Pattern 4: CAPABLE_OF - "X kann Y" / "X kann nicht Y" / "X vermag Y"
+            # NEU: Negation-Behandlung + Synonym-Erweiterung integriert!
             capable_of_match = re.match(
-                r"^\s*(.+?)\s+(?:kann|können)\s+(.+?)\s*\.?\s*$",
+                r"^\s*(.+?)\s+(?:kann|können|vermag|vermögen|ist fähig zu|sind fähig zu|ist in der lage zu|sind in der lage zu)\s+(.+?)\s*\.?\s*$",
                 text_lower,
                 re.IGNORECASE,
             )
@@ -691,9 +1068,24 @@ class MeaningPointExtractor:
                 ability_raw = capable_of_match.group(2).strip()
 
                 subject = self.text_normalizer.clean_entity(subject_raw)
-                ability = self.text_normalizer.clean_entity(ability_raw)
 
-                logger.debug(f"CAPABLE_OF erkannt: '{subject}' kann '{ability}'")
+                # Extrahiere Negation aus der Fähigkeit
+                ability_cleaned, polarity = self._extract_negation(ability_raw)
+
+                # Detect uncertainty markers (hedge words)
+                confidence_multiplier, hedge_words, uncertainty_level = (
+                    self._detect_uncertainty_markers(ability_cleaned)
+                )
+
+                ability = self.text_normalizer.clean_entity(ability_cleaned)
+
+                # Adjust confidence based on uncertainty
+                base_confidence = 0.91
+                adjusted_confidence = base_confidence * confidence_multiplier
+
+                logger.debug(
+                    f"CAPABLE_OF erkannt: '{subject}' kann '{ability}' (Polarity={polarity.name})"
+                )
 
                 # PHASE 3 (Schritt 3): Sehr hohe Confidence für "kann"-Konstruktionen
                 # confidence >= 0.85 -> Auto-Save
@@ -702,19 +1094,25 @@ class MeaningPointExtractor:
                         category=MeaningPointCategory.DEFINITION,
                         cue="auto_detect_capable_of",
                         text_span=text,
-                        confidence=0.91,  # Sehr hohe Confidence -> Auto-Save
+                        polarity=polarity,  # NEU: Polarity wird gesetzt!
+                        confidence=adjusted_confidence,  # NEU: Confidence angepasst durch Uncertainty!
                         arguments={
                             "subject": subject,
                             "relation_type": "CAPABLE_OF",
                             "object": ability,
                             "auto_detected": True,
+                            "negated": polarity
+                            == Polarity.NEGATIVE,  # NEU: Flag für Negation
+                            "hedge_words": hedge_words,  # NEU: Uncertainty-Marker
+                            "uncertainty_level": uncertainty_level,  # NEU: Uncertainty Level
                         },
                     )
                 ]
 
-            # Pattern 5: PART_OF - "X hat Y" / "X gehört zu Y"
+            # Pattern 5: PART_OF - "X hat Y" / "X hat kein Y" / "X gehört zu Y" / "X besitzt Y"
+            # NEU: Negation-Behandlung + Synonym-Erweiterung integriert!
             part_of_match = re.match(
-                r"^\s*(.+?)\s+(?:hat|haben|gehört zu|besitzt)\s+(.+?)\s*\.?\s*$",
+                r"^\s*(.+?)\s+(?:hat|haben|gehört zu|gehören zu|besitzt|besitzen|verfügt über|verfügen über)\s+(.+?)\s*\.?\s*$",
                 text_lower,
                 re.IGNORECASE,
             )
@@ -723,9 +1121,14 @@ class MeaningPointExtractor:
                 object_raw = part_of_match.group(2).strip()
 
                 subject = self.text_normalizer.clean_entity(subject_raw)
-                part = self.text_normalizer.clean_entity(object_raw)
 
-                logger.debug(f"PART_OF erkannt: '{subject}' hat/gehört zu '{part}'")
+                # Extrahiere Negation aus dem Objekt
+                object_cleaned, polarity = self._extract_negation(object_raw)
+                part = self.text_normalizer.clean_entity(object_cleaned)
+
+                logger.debug(
+                    f"PART_OF erkannt: '{subject}' hat/gehört zu '{part}' (Polarity={polarity.name})"
+                )
 
                 # PHASE 3 (Schritt 3): Hohe Confidence für PART_OF Relationen
                 # confidence >= 0.85 -> Auto-Save
@@ -734,19 +1137,23 @@ class MeaningPointExtractor:
                         category=MeaningPointCategory.DEFINITION,
                         cue="auto_detect_part_of",
                         text_span=text,
+                        polarity=polarity,  # NEU: Polarity wird gesetzt!
                         confidence=0.88,  # Hohe Confidence -> Auto-Save
                         arguments={
                             "subject": subject,
                             "relation_type": "PART_OF",
                             "object": part,
                             "auto_detected": True,
+                            "negated": polarity
+                            == Polarity.NEGATIVE,  # NEU: Flag für Negation
                         },
                     )
                 ]
 
             # Pattern 6: LOCATED_IN - "X liegt in Y" / "X ist in Y" / "X befindet sich in Y"
+            # NEU: Synonym-Erweiterung integriert!
             located_in_match = re.match(
-                r"^\s*(.+?)\s+(?:liegt in|ist in|befindet sich in)\s+(.+?)\s*\.?\s*$",
+                r"^\s*(.+?)\s+(?:liegt in|ist in|befindet sich in|befindet sich im|liegt im|ist im)\s+(.+?)\s*\.?\s*$",
                 text_lower,
                 re.IGNORECASE,
             )
@@ -767,6 +1174,41 @@ class MeaningPointExtractor:
                         cue="auto_detect_located_in",
                         text_span=text,
                         confidence=0.93,  # Sehr hohe Confidence -> Auto-Save
+                        arguments={
+                            "subject": subject,
+                            "relation_type": "LOCATED_IN",
+                            "object": location,
+                            "auto_detected": True,
+                        },
+                    )
+                ]
+
+            # Pattern 7: LOCATED_IN - "X lebt in Y" / "X wohnt in Y" / "X leben in Y"
+            # Erweitert um Verben die Aufenthalt/Wohnen beschreiben
+            lives_in_match = re.match(
+                r"^\s*(.+?)\s+(?:lebt|leben|wohnt|wohnen)\s+(?:in|im)\s+(.+?)\s*\.?\s*$",
+                text_lower,
+                re.IGNORECASE,
+            )
+            if lives_in_match:
+                subject_raw = lives_in_match.group(1).strip()
+                location_raw = lives_in_match.group(2).strip()
+
+                subject = self.text_normalizer.clean_entity(subject_raw)
+                location = self.text_normalizer.clean_entity(location_raw)
+
+                logger.debug(
+                    f"LOCATED_IN (leben/wohnen) erkannt: '{subject}' lebt in '{location}'"
+                )
+
+                # PHASE 3 (Schritt 3): Hohe Confidence für "leben in/wohnen in" Muster
+                # confidence >= 0.85 -> Auto-Save
+                return [
+                    self._create_meaning_point(
+                        category=MeaningPointCategory.DEFINITION,
+                        cue="auto_detect_lives_in",
+                        text_span=text,
+                        confidence=0.89,  # Hohe Confidence -> Auto-Save
                         arguments={
                             "subject": subject,
                             "relation_type": "LOCATED_IN",
@@ -804,7 +1246,8 @@ class MeaningPointExtractor:
         try:
             text_lower = text.lower().strip()
 
-            # Arithmetische Trigger-Wörter (Operatoren)
+            # Arithmetische Trigger-Wörter (ERWEITERT!)
+            # NEU: Auch Konzepte wie Summe, Differenz, Durchschnitt, Prozent
             arithmetic_operators = [
                 "plus",
                 "minus",
@@ -821,9 +1264,21 @@ class MeaningPointExtractor:
                 "addiert",
                 "subtrahiert",
                 "dividiert",
+                # NEU: Erweiterte Operatoren
+                "summe",
+                "differenz",
+                "produkt",
+                "quotient",
+                "durchschnitt",
+                "mittelwert",
+                "prozent",
+                "%",
+                "hoch",
+                "quadrat",
+                "wurzel",
             ]
 
-            # Frage-Trigger
+            # Frage-Trigger (ERWEITERT!)
             question_triggers = [
                 "was ist",
                 "wie viel",
@@ -833,6 +1288,11 @@ class MeaningPointExtractor:
                 "rechne",
                 "errechne",
                 "berechnen",
+                # NEU: Erweiterte Trigger
+                "ermittle",
+                "bestimme",
+                "wie hoch",
+                "wie groß",
             ]
 
             # Prüfe auf arithmetische Operatoren

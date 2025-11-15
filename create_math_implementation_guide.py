@@ -2,7 +2,7 @@
 Generator für detaillierte Mathematik-Modul Implementierungsdokumentation
 """
 from docx import Document
-from docx.shared import Pt, Inches, RGBColor
+from docx.shared import Pt, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 
 def add_heading(doc, text, level=1):

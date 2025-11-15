@@ -1,0 +1,185 @@
+[32m[2025-11-14 20:22:15] [INFO    ] [kai.logging_config] Logging-System initialisiert[0m
+[32m[2025-11-14 20:22:15] [INFO    ] [kai_config] Konfiguration geladen | file=C:\Users\gehri\desktop\kai-claude\kai_config.json[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [component_1_netzwerk_core] Initialisiere Neo4j-Verbindung | uri=bolt://127.0.0.1:7687 | user=neo4j[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [component_1_netzwerk_core] Neo4j-Verbindung erfolgreich hergestellt | uri=bolt://127.0.0.1:7687[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT WortLemma IF NOT EXISTS FOR (e:Wort) REQUIRE (e.lemma) IS UNIQUE` has no effect.} {description: `CONSTRAINT WortLemma FOR (e:Wort) REQUIRE (e.lemma) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT WortLemma IF NOT EXISTS FOR (w:Wort) REQUIRE w.lemma IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT KonzeptName IF NOT EXISTS FOR (e:Konzept) REQUIRE (e.name) IS UNIQUE` has no effect.} {description: `CONSTRAINT KonzeptName FOR (e:Konzept) REQUIRE (e.name) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT KonzeptName IF NOT EXISTS FOR (k:Konzept) REQUIRE k.name IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT ExtractionRuleType IF NOT EXISTS FOR (e:ExtractionRule) REQUIRE (e.relation_type) IS UNIQUE` has no effect.} {description: `CONSTRAINT ExtractionRuleType FOR (e:ExtractionRule) REQUIRE (e.relation_type) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT ExtractionRuleType IF NOT EXISTS FOR (r:ExtractionRule) REQUIRE r.relation_type IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT PatternPrototypeId IF NOT EXISTS FOR (e:PatternPrototype) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT PatternPrototypeId FOR (e:PatternPrototype) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT PatternPrototypeId IF NOT EXISTS FOR (p:PatternPrototype) REQUIRE p.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT LexiconName IF NOT EXISTS FOR (e:Lexicon) REQUIRE (e.name) IS UNIQUE` has no effect.} {description: `CONSTRAINT LexiconName FOR (e:Lexicon) REQUIRE (e.name) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT LexiconName IF NOT EXISTS FOR (l:Lexicon) REQUIRE l.name IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT EpisodeId IF NOT EXISTS FOR (e:Episode) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT EpisodeId FOR (e:Episode) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT EpisodeId IF NOT EXISTS FOR (e:Episode) REQUIRE e.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT InferenceEpisodeId IF NOT EXISTS FOR (e:InferenceEpisode) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT InferenceEpisodeId FOR (e:InferenceEpisode) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT InferenceEpisodeId IF NOT EXISTS FOR (ie:InferenceEpisode) REQUIRE ie.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT ProofStepId IF NOT EXISTS FOR (e:ProofStep) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT ProofStepId FOR (e:ProofStep) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT ProofStepId IF NOT EXISTS FOR (ps:ProofStep) REQUIRE ps.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT HypothesisId IF NOT EXISTS FOR (e:Hypothesis) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT HypothesisId FOR (e:Hypothesis) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT HypothesisId IF NOT EXISTS FOR (h:Hypothesis) REQUIRE h.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT AgentId IF NOT EXISTS FOR (e:Agent) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT AgentId FOR (e:Agent) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT AgentId IF NOT EXISTS FOR (a:Agent) REQUIRE a.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT BeliefId IF NOT EXISTS FOR (e:Belief) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT BeliefId FOR (e:Belief) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT BeliefId IF NOT EXISTS FOR (b:Belief) REQUIRE b.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT MetaBeliefId IF NOT EXISTS FOR (e:MetaBelief) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT MetaBeliefId FOR (e:MetaBelief) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT MetaBeliefId IF NOT EXISTS FOR (mb:MetaBelief) REQUIRE mb.id IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT ProductionRuleName IF NOT EXISTS FOR (e:ProductionRule) REQUIRE (e.name) IS UNIQUE` has no effect.} {description: `CONSTRAINT ProductionRuleName FOR (e:ProductionRule) REQUIRE (e.name) IS UNIQUE` already exists.} {position: None} for query: 'CREATE CONSTRAINT ProductionRuleName IF NOT EXISTS FOR (pr:ProductionRule) REQUIRE pr.name IS UNIQUE'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [component_1_netzwerk_core] Neo4j Constraints erfolgreich konfiguriert[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX isa_confidence_index IF NOT EXISTS FOR ()-[e:IS_A]-() ON (e.confidence)` has no effect.} {description: `RANGE INDEX isa_confidence_index FOR ()-[e:IS_A]-() ON (e.confidence)` already exists.} {position: None} for query: 'CREATE INDEX isa_confidence_index IF NOT EXISTS FOR ()-[r:IS_A]-() ON (r.confidence)'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX property_confidence_index IF NOT EXISTS FOR ()-[e:HAS_PROPERTY]-() ON (e.confidence)` has no effect.} {description: `RANGE INDEX property_confidence_index FOR ()-[e:HAS_PROPERTY]-() ON (e.confidence)` already exists.} {position: None} for query: 'CREATE INDEX property_confidence_index IF NOT EXISTS FOR ()-[r:HAS_PROPERTY]-() ON (r.confidence)'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE RANGE INDEX capable_confidence_index IF NOT EXISTS FOR ()-[e:CAPABLE_OF]-() ON (e.confidence)` has no effect.} {description: `RANGE INDEX capable_confidence_index FOR ()-[e:CAPABLE_OF]-() ON (e.confidence)` already exists.} {position: None} for query: 'CREATE INDEX capable_confidence_index IF NOT EXISTS FOR ()-[r:CAPABLE_OF]-() ON (r.confidence)'[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [component_1_netzwerk_core] Neo4j Performance-Indizes erfolgreich konfiguriert[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT UsageContextId IF NOT EXISTS FOR (e:UsageContext) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT UsageContextId FOR (e:UsageContext) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: '\n                CREATE CONSTRAINT UsageContextId IF NOT EXISTS\n                FOR (uc:UsageContext) REQUIRE uc.id IS UNIQUE\n                '[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [neo4j.notifications] Received notification from DBMS server: {severity: INFORMATION} {code: Neo.ClientNotification.Schema.IndexOrConstraintAlreadyExists} {category: SCHEMA} {title: `CREATE CONSTRAINT TypoFeedbackId IF NOT EXISTS FOR (e:TypoFeedback) REQUIRE (e.id) IS UNIQUE` has no effect.} {description: `CONSTRAINT TypoFeedbackId FOR (e:TypoFeedback) REQUIRE (e.id) IS UNIQUE` already exists.} {position: None} for query: '\n                CREATE CONSTRAINT TypoFeedbackId IF NOT EXISTS\n                FOR (tf:TypoFeedback) REQUIRE tf.id IS UNIQUE\n                '[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [component_11_embedding_service] Lade Embedding-Modell | model_name=paraphrase-multilingual-MiniLM-L12-v2[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [sentence_transformers.SentenceTransformer] Use pytorch device_name: cpu[0m
+[32m[2025-11-14 20:22:18] [INFO    ] [sentence_transformers.SentenceTransformer] Load pretrained SentenceTransformer: paraphrase-multilingual-MiniLM-L12-v2[0m
+[32m[2025-11-14 20:22:21] [INFO    ] [component_11_embedding_service] Embedding-Modell geladen | model_name=paraphrase-multilingual-MiniLM-L12-v2 | vector_dimension=384[0m
+[32m[2025-11-14 20:22:22] [INFO    ] [component_6_linguistik_engine] [LinguisticPreprocessor] spaCy-Modell 'de_core_news_sm' erfolgreich geladen.[0m
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] MeaningPointExtractor initialisiert mit zweiphasiger Erkennung[0m
+
+====================================================================================================
+SYSTEMATISCHE ANALYSE: AUTOMATISCHES LERNSYSTEM VON KAI
+====================================================================================================
+
+
+1. EINFACHE DEKLARATIVE AUSSAGEN (BASELINE)
+----------------------------------------------------------------------------------------------------
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_is_a | category=DEFINITION[0m
+[OK] Ein Hund ist ein Tier                                        | Erkannt (IS_A)            | Conf: 0.92
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_capable_of | category=DEFINITION[0m
+[OK] Ein Vogel kann fliegen                                       | Erkannt (CAPABLE_OF)      | Conf: 0.91
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_located_in | category=DEFINITION[0m
+[OK] Berlin liegt in Deutschland                                  | Erkannt (LOCATED_IN)      | Conf: 0.93
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_has_property | category=DEFINITION[0m
+[OK] Eine Rose ist rot                                            | Erkannt (HAS_PROPERTY)    | Conf: 0.78
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_part_of | category=DEFINITION[0m
+[OK] Ein Auto hat Räder                                           | Erkannt (PART_OF)         | Conf: 0.88
+
+Gruppe 'Einfache Aussagen': 5/5 Tests bestanden (100.0%)
+
+
+2. NEGATIONEN (KRITISCH)
+----------------------------------------------------------------------------------------------------
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_capable_of | category=DEFINITION[0m
+[OK] Ein Pinguin kann nicht fliegen                               | Erkannt (CAPABLE_OF)      | Conf: 0.91
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_has_property | category=DEFINITION[0m
+[OK] Ein Stein ist kein Lebewesen                                 | Erkannt (HAS_PROPERTY)    | Conf: 0.78
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_capable_of | category=DEFINITION[0m
+[OK] Fische können nicht an Land leben                            | Erkannt (CAPABLE_OF)      | Conf: 0.91
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_has_property | category=DEFINITION[0m
+[OK] Glas ist nicht transparent                                   | Erkannt (HAS_PROPERTY)    | Conf: 0.78
+
+Gruppe 'Negationen': 4/4 Tests bestanden (100.0%)
+
+
+3. KOMPLEXE/VERSCHACHTELTE AUSSAGEN
+----------------------------------------------------------------------------------------------------
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_is_a | category=DEFINITION[0m
+[OK] Ein Hund ist ein Tier, das bellen kann                       | Erkannt (IS_A)            | Conf: 0.92
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_is_a | category=DEFINITION[0m
+[OK] Berlin ist die Hauptstadt von Deutschland                    | Erkannt (IS_A)            | Conf: 0.92
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_is_a | category=DEFINITION[0m
+[OK] Ein Vogel ist ein Tier mit Flügeln                           | Erkannt (IS_A)            | Conf: 0.92
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_is_a | category=DEFINITION[0m
+[OK] Eine Rose ist eine Blume, die Dornen hat                     | Erkannt (IS_A)            | Conf: 0.92
+
+Gruppe 'Komplexe Aussagen': 4/4 Tests bestanden (100.0%)
+
+
+4. KONDITIONALE AUSSAGEN
+----------------------------------------------------------------------------------------------------
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 32.01it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Wenn es regnet, wird die Straße nass | text_length=36[0m
+
+[OK] Wenn es regnet, wird die Straße nass                         | Nicht erkannt             | Conf: 0.00
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 142.97it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Falls ein Tier Flügel hat, kann es fliegen | text_length=42[0m
+
+[OK] Falls ein Tier Flügel hat, kann es fliegen                   | Nicht erkannt             | Conf: 0.00
+
+Gruppe 'Konditionale': 2/2 Tests bestanden (100.0%)
+
+
+5. TEMPORALE AUSSAGEN
+----------------------------------------------------------------------------------------------------
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 159.09it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Hunde waren früher Wölfe | text_length=24[0m
+[OK] Hunde waren früher Wölfe                                     | Nicht erkannt             | Conf: 0.00
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_has_property | category=DEFINITION[0m
+
+[OK] Im Winter ist es kalt                                        | Erkannt (HAS_PROPERTY)    | Conf: 0.78
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 176.94it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Morgens singt der Vogel | text_length=23[0m
+[FEHLER] Morgens singt der Vogel                                      | Nicht erkannt             | Conf: 0.00
+
+Gruppe 'Temporal': 2/3 Tests bestanden (66.7%)
+
+
+6. QUANTIFIZIERTE AUSSAGEN
+----------------------------------------------------------------------------------------------------
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_is_a_plural | category=DEFINITION[0m
+[OK] Alle Hunde sind Tiere                                        | Erkannt (IS_A)            | Conf: 0.87
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_capable_of | category=DEFINITION[0m
+[OK] Manche Vögel können nicht fliegen                            | Erkannt (CAPABLE_OF)      | Conf: 0.91
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_has_property | category=DEFINITION[0m
+[OK] Die meisten Menschen sind freundlich                         | Erkannt (HAS_PROPERTY)    | Conf: 0.78
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_lives_in | category=DEFINITION[0m
+
+[OK] Einige Fische leben im Meer                                  | Erkannt (LOCATED_IN)      | Conf: 0.89
+
+Gruppe 'Quantifiziert': 4/4 Tests bestanden (100.0%)
+
+
+7. VERGLEICHENDE AUSSAGEN
+----------------------------------------------------------------------------------------------------
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 88.27it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Ein Elefant ist größer als eine Maus | text_length=36[0m
+
+[OK] Ein Elefant ist größer als eine Maus                         | Nicht erkannt             | Conf: 0.00
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 144.28it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Hunde sind schneller als Schildkröten | text_length=37[0m
+
+[OK] Hunde sind schneller als Schildkröten                        | Nicht erkannt             | Conf: 0.00
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 126.21it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Gold ist wertvoller als Silber | text_length=30[0m
+
+[OK] Gold ist wertvoller als Silber                               | Nicht erkannt             | Conf: 0.00
+
+Gruppe 'Vergleiche': 3/3 Tests bestanden (100.0%)
+
+
+8. KAUSALE BEZIEHUNGEN
+----------------------------------------------------------------------------------------------------
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 162.68it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Regen verursacht Nässe | text_length=22[0m
+
+[OK] Regen verursacht Nässe                                       | Nicht erkannt             | Conf: 0.00
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 175.47it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Wärme lässt Eis schmelzen | text_length=25[0m
+[OK] Wärme lässt Eis schmelzen                                    | Nicht erkannt             | Conf: 0.00
+
+Gruppe 'Kausal': 2/2 Tests bestanden (100.0%)
+
+
+9. MEHRDEUTIGE AUSSAGEN
+----------------------------------------------------------------------------------------------------
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_has_property | category=DEFINITION[0m
+
+[OK] Die Bank ist hart                                            | Erkannt (HAS_PROPERTY)    | Conf: 0.78
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 143.42it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Der Kiefer schmerzt | text_length=19[0m
+
+[FEHLER] Der Kiefer schmerzt                                          | Nicht erkannt             | Conf: 0.00
+
+Gruppe 'Mehrdeutig': 1/2 Tests bestanden (50.0%)
+
+
+10. EDGE CASES
+----------------------------------------------------------------------------------------------------
+[OK]                                                              | Nicht erkannt             | Conf: 0.00
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 162.04it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=Hund | text_length=4[0m
+
+[OK] Hund                                                         | Nicht erkannt             | Conf: 0.00
+Batches:   0%|          | 0/1 [00:00<?, ?it/s]Batches: 100%|██████████| 1/1 [00:00<00:00, 191.59it/s][33m[2025-11-14 20:22:22] [WARNING ] [component_7_meaning_extractor] Keine Bedeutung extrahiert | text_preview=ist ein | text_length=7[0m
+[OK] ist ein                                                      | Nicht erkannt             | Conf: 0.00
+[32m[2025-11-14 20:22:22] [INFO    ] [component_7_meaning_extractor] Definition erkannt | cue=auto_detect_has_property | category=DEFINITION[0m
+
+[OK] X ist Y                                                      | Erkannt (HAS_PROPERTY)    | Conf: 0.78
+
+Gruppe 'Edge Cases': 4/4 Tests bestanden (100.0%)
+
+
+====================================================================================================
+ZUSAMMENFASSUNG
+====================================================================================================
+
+Gesamt: 31/33 Tests bestanden (93.9%)
+Bestanden: 31
+Fehlgeschlagen: 2
+
+IDENTIFIZIERTE SCHWÄCHEN:
+----------------------------------------------------------------------------------------------------
+
+====================================================================================================

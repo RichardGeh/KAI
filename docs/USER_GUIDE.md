@@ -707,6 +707,191 @@ cat logs/error.log
 
 ---
 
+## Dynamische Antwortgenerierung (Production System)
+
+### Was ist das Production System?
+
+Ab Version 2.0 nutzt KAI ein **Production System** für die Generierung von Antworten - eine fortschrittliche Methode, die Antworten Schritt für Schritt aufbaut, statt einfach Text-Templates zu verwenden.
+
+**Analogie**: Statt ein fertiges Rezept abzulesen (alte Methode), kocht KAI jetzt wie ein Chef, der aus verfügbaren Zutaten (Fakten) kreativ ein Gericht (Antwort) komponiert.
+
+### Wie funktioniert es?
+
+**Alte Pipeline-Methode** (bis v1.x):
+```
+Fakten → Template füllen → Fertige Antwort
+```
+
+**Neues Production System** (ab v2.0):
+```
+Fakten → Regeln anwenden → Inhalte auswählen → Wortwahl → Struktur → Fertige Antwort
+```
+
+Das Production System wendet **Regeln** an, die in 4 Kategorien eingeteilt sind:
+
+1. **Content Selection** (Was sage ich?): Welche Fakten sind relevant?
+2. **Lexicalization** (Wie sage ich es?): Welche Wörter verwende ich?
+3. **Discourse** (Wie verbinde ich Sätze?): Übergänge, Konjunktionen
+4. **Syntax** (Grammatik): Satzstruktur, Reihenfolge
+
+**Beispiel:**
+
+```
+User: "Was ist ein Hund?"
+
+Production System:
+1. Content Selection: Wähle Top-Fakt "Hund IS_A Tier" (Confidence: 0.95)
+2. Lexicalization: "IS_A" → "ist ein"
+3. Syntax: Baue Satz "Ein Hund ist ein Tier"
+4. Discourse: (keine Konjunktion nötig für einfachen Satz)
+
+→ Antwort: "Ein Hund ist ein Tier."
+```
+
+### Unterschied zur alten Methode
+
+| Aspekt | Pipeline (alt) | Production System (neu) |
+|--------|---------------|-------------------------|
+| **Flexibilität** | Starr, Template-basiert | Flexibel, regelbasiert |
+| **Qualität** | Manchmal repetitiv | Variabler, natürlicher |
+| **Transparenz** | Schwer nachvollziehbar | Beweisbaum zeigt Schritte |
+| **Lernfähig** | Statisch | Lernt aus Feedback |
+| **Performance** | Schnell (0.23s) | Etwas schneller (0.19s) |
+
+**Konkrete Verbesserungen:**
+
+✅ **Natürlichere Antworten**: Weniger Wiederholungen, bessere Übergänge
+✅ **Transparenz**: Beweisbaum zeigt, welche Regeln angewendet wurden
+✅ **Adaptive Qualität**: KAI lernt aus deinem Feedback, welche Regeln gut funktionieren
+✅ **Konsistenz**: Gleiche Regeln für ähnliche Fragen → konsistentere Antworten
+
+### Wie sehe ich, welches System verwendet wurde?
+
+**Methode 1: A/B Testing Dashboard**
+
+Location: **Einstellungen → Analysis Window → A/B Testing Tab**
+
+- Zeigt Statistiken für beide Systeme (Pipeline vs. Production System)
+- Aktueller Split (z.B. 50% Pipeline, 50% Production System)
+- Metriken: Queries Handled, Avg Confidence, Response Time
+
+**Methode 2: Production Trace Viewer**
+
+Location: **Einstellungen → Analysis Window → Production Trace Tab**
+
+- Zeigt **alle Regelanwendungen** für die letzte generierte Antwort
+- Wenn du hier Einträge siehst → Production System wurde verwendet
+- Wenn leer → Pipeline wurde verwendet
+
+**Methode 3: Beweisbaum**
+
+Location: **Hauptfenster → Beweisbaum Tab**
+
+- Production System-Antworten haben einen speziellen **"Response Generation"** Bereich im Beweisbaum
+- Zeigt alle Schritte von "User Query" bis "Final Response"
+- Pipeline-Antworten haben diesen Bereich nicht
+
+**Methode 4: Logging** (für Fortgeschrittene)
+
+```bash
+# Suche nach "production_system" in Logs
+cat logs/kai.log | grep "production_system"
+```
+
+### Production Weight: Wie viel Production System?
+
+**Standard**: 50% Pipeline, 50% Production System (A/B Testing)
+
+Du kannst den Anteil des Production Systems anpassen:
+
+**Location**: **Einstellungen → Analysis Window → A/B Testing Tab → Production Weight Slider**
+
+- **0%**: Nur alte Pipeline (Fallback, falls Probleme auftreten)
+- **50%**: Beide Systeme gleichmäßig (Standard, für Vergleich)
+- **100%**: Nur Production System (Empfohlen nach Evaluationsphase)
+
+**Quick-Select Buttons**: 0%, 50%, 100% für schnelles Umschalten
+
+**Empfehlung**: Starte mit 50%, sammle Erfahrungen über 1-2 Wochen, dann auf 100% erhöhen.
+
+### Feedback geben für bessere Antworten
+
+**Wichtig**: Dein Feedback hilft dem Production System zu lernen!
+
+Nach jeder Antwort kannst du bewerten:
+- ✅ **Correct**: Antwort war gut → Regeln werden bevorzugt
+- ❌ **Incorrect**: Antwort war schlecht → Regeln werden seltener verwendet
+- ❓ **Unsure**: Teilweise richtig → Neutrale Bewertung
+
+**Was passiert mit dem Feedback?**
+1. KAI speichert, welche Regeln für diese Antwort verwendet wurden
+2. Success Rate der Regeln wird aktualisiert
+3. Zukünftige Antworten bevorzugen erfolgreiche Regeln
+
+**Tipp**: Je mehr Feedback du gibst, desto besser werden die Antworten!
+
+### Beispiel-Session: Pipeline vs. Production System
+
+**Szenario**: "Was ist ein Hund?"
+
+**Pipeline (alt)**:
+```
+KAI: "Ein Hund ist ein Tier. (Confidence: 0.95)"
+```
+- Einfach, direkt
+- Immer gleiche Struktur
+- Keine Variation
+
+**Production System (neu)**:
+```
+KAI: "Ein Hund ist ein Tier. Hunde sind Säugetiere und können bellen."
+```
+- Reichhaltigere Antwort
+- Kombiniert mehrere Fakten
+- Natürlichere Übergänge
+
+**Beweisbaum (Production System)**:
+```
+Response Generation
+├─ Cycle 1: select_highest_confidence_fact
+│   → Wähle "Hund IS_A Tier" (Conf: 0.95)
+├─ Cycle 2: select_secondary_facts
+│   → Wähle "Hund IS_A Säugetier", "Hund CAPABLE_OF bellen"
+├─ Cycle 3: lexicalize_is_a_relation
+│   → "IS_A" → "ist ein/sind"
+├─ Cycle 4: combine_related_facts
+│   → Verbinde verwandte Fakten mit "und"
+└─ Cycle 5: format_complex_sentence
+    → "Ein Hund ist ein Tier. Hunde sind Säugetiere und können bellen."
+```
+
+### Häufige Fragen (FAQ)
+
+**Q: Ist das Production System langsamer als die Pipeline?**
+A: Nein, tatsächlich ist es ~20% schneller (0.19s vs. 0.23s durchschnittlich).
+
+**Q: Kann ich das Production System deaktivieren?**
+A: Ja, setze Production Weight auf 0% im A/B Testing Dashboard.
+
+**Q: Warum bekomme ich manchmal verschiedene Antworten auf die gleiche Frage?**
+A: Das Production System wählt dynamisch die besten Regeln. Bei mehreren gleich guten Optionen kann die Auswahl variieren. Das ist gewollt und macht Antworten natürlicher.
+
+**Q: Wie viele Regeln gibt es?**
+A: Aktuell 72+ Regeln, aufgeteilt in:
+- Content Selection: ~25 Regeln
+- Lexicalization: ~20 Regeln
+- Discourse: ~15 Regeln
+- Syntax: ~12 Regeln
+
+**Q: Kann ich eigene Regeln hinzufügen?**
+A: Für Entwickler: Ja, siehe `docs/PRODUCTION_SYSTEM.md` für Details.
+   Für End-User: Aktuell nicht über die UI, aber geplant für v2.2.
+
+**Q: Was passiert, wenn eine Regel fehlschlägt?**
+A: Das System wählt automatisch eine alternative Regel (Conflict Resolution). Im schlimmsten Fall fällt es auf die Pipeline zurück.
+
+---
+
 ## Neue UI-Features (v2.1)
 
 ### Feedback-Buttons
