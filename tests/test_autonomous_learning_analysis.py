@@ -19,19 +19,15 @@ from typing import List, Tuple
 
 # Fix Unicode encoding issues on Windows
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace"
-    )
-    sys.stderr = io.TextIOWrapper(
-        sys.stderr.buffer, encoding="utf-8", errors="replace"
-    )
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from component_1_netzwerk import KonzeptNetzwerk
+from component_5_linguistik_strukturen import MeaningPointCategory
 from component_6_linguistik_engine import LinguisticPreprocessor
 from component_7_meaning_extractor import MeaningPointExtractor
 from component_8_prototype_matcher import PrototypingEngine
 from component_11_embedding_service import EmbeddingService
-from component_5_linguistik_strukturen import MeaningPointCategory
 
 
 class AutonomousLearningAnalyzer:
@@ -122,7 +118,10 @@ class AutonomousLearningAnalyzer:
             ("Ein Pinguin kann nicht fliegen", True),  # Sollte erkannt werden!
             ("Ein Stein ist kein Lebewesen", True),
             ("Fische können nicht an Land leben", True),
-            ("Glas ist nicht transparent", True),  # Falsche Aussage, aber sollte erkannt werden
+            (
+                "Glas ist nicht transparent",
+                True,
+            ),  # Falsche Aussage, aber sollte erkannt werden
         ]
         self._run_test_group(negation_tests, "Negationen")
 
@@ -171,7 +170,10 @@ class AutonomousLearningAnalyzer:
         print("\n7. VERGLEICHENDE AUSSAGEN")
         print("-" * 100)
         comparative_tests = [
-            ("Ein Elefant ist größer als eine Maus", False),  # Zu komplex für einfache Patterns
+            (
+                "Ein Elefant ist größer als eine Maus",
+                False,
+            ),  # Zu komplex für einfache Patterns
             ("Hunde sind schneller als Schildkröten", False),
             ("Gold ist wertvoller als Silber", False),
         ]

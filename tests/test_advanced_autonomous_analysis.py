@@ -12,16 +12,13 @@ Analysiert:
 
 import io
 import sys
+
 # Removed unused imports: Dict, List
 
 # Fix Unicode encoding issues on Windows
 if sys.platform == "win32":
-    sys.stdout = io.TextIOWrapper(
-        sys.stdout.buffer, encoding="utf-8", errors="replace"
-    )
-    sys.stderr = io.TextIOWrapper(
-        sys.stderr.buffer, encoding="utf-8", errors="replace"
-    )
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 from component_1_netzwerk import KonzeptNetzwerk
 from component_6_linguistik_engine import LinguisticPreprocessor
@@ -102,7 +99,7 @@ class AdvancedAutonomousAnalyzer:
         print(f"  Typo Threshold: {stats['typo_threshold']}")
         print(f"  Sequence Threshold: {stats['sequence_threshold']}")
         print(f"\nConfidence Gates:")
-        gates = stats['confidence_gates']
+        gates = stats["confidence_gates"]
         print(f"  Auto-Correct: >= {gates['auto_correct']}")
         print(f"  Ask User: >= {gates['ask_user']}")
         print(f"  Min Confidence: >= {gates['min_confidence']}")
@@ -122,10 +119,10 @@ class AdvancedAutonomousAnalyzer:
 
         # Bewertung
         print(f"\n[BEWERTUNG] Adaptive Thresholds:")
-        if stats['phase'] == 'cold_start':
+        if stats["phase"] == "cold_start":
             print("  [WARNUNG] System in COLD_START Phase - Sehr konservativ")
             print("  [EMPFEHLUNG] Mehr Daten sammeln für bessere Performance")
-        elif stats['phase'] == 'warming':
+        elif stats["phase"] == "warming":
             print("  [OK] System in WARMING Phase - Standard-Gates aktiv")
         else:
             print("  [OPTIMAL] System in MATURE Phase - Aggressivere Gates")
@@ -144,40 +141,31 @@ class AdvancedAutonomousAnalyzer:
             ("Ein roter Apfel", "Attribut (Farbe)", False),
             ("Ein großer Hund", "Attribut (Größe)", False),
             ("Ein schnelles Auto", "Attribut (Geschwindigkeit)", False),
-
             # Ownership/Possession
             ("Das Buch gehört mir", "Besitz (Person)", False),
             ("Peter hat einen Hund", "Besitz (Named Entity)", False),
             ("Mein Auto ist rot", "Besitz + Eigenschaft", True),
-
             # Temporal Relations
             ("Sommer folgt auf Frühling", "Temporale Sequenz", False),
             ("Weihnachten ist im Dezember", "Temporale Zuordnung", True),
-
             # Purpose/Function
             ("Ein Hammer dient zum Hämmern", "Zweck/Funktion", False),
             ("Ein Messer wird zum Schneiden benutzt", "Verwendung", False),
-
             # Material/Composition
             ("Ein Tisch besteht aus Holz", "Material", False),
             ("Wasser besteht aus H2O", "Zusammensetzung", False),
-
             # Causality
             ("Hitze verursacht Schweiß", "Kausale Relation", False),
             ("Regen macht die Straße nass", "Kausale Wirkung", False),
-
             # Equivalence
             ("H2O ist Wasser", "Äquivalenz (Formel)", False),
             ("Ein Doktor ist ein Arzt", "Äquivalenz (Synonym)", True),
-
             # Negation with explicit denial
             ("Ein Pinguin ist kein Säugetier", "Negative IS_A", False),
             ("Glas ist nicht essbar", "Negative Property", False),
-
             # Quantified Properties
             ("Die meisten Vögel können fliegen", "Quantifizierte Fähigkeit", True),
             ("Viele Menschen mögen Pizza", "Quantifizierte Präferenz", False),
-
             # Comparative (should be filtered)
             ("Hunde sind treuer als Katzen", "Komparativ (Filter)", False),
         ]
@@ -193,9 +181,7 @@ class AdvancedAutonomousAnalyzer:
             detected = len(meaning_points) > 0
             confidence = meaning_points[0].confidence if detected else 0.0
             relation = (
-                meaning_points[0].arguments.get("relation_type")
-                if detected
-                else None
+                meaning_points[0].arguments.get("relation_type") if detected else None
             )
 
             if detected == should_detect:
@@ -247,12 +233,10 @@ class AdvancedAutonomousAnalyzer:
             ("Ein Hund ist ein Tier", 0.92, "IS_A mit Artikel"),
             ("Berlin liegt in Deutschland", 0.93, "LOCATED_IN klar"),
             ("Ein Vogel kann fliegen", 0.91, "CAPABLE_OF eindeutig"),
-
             # Hohe Confidence (0.85-0.89)
             ("Katzen sind Säugetiere", 0.87, "IS_A Plural"),
             ("Ein Auto hat Räder", 0.88, "PART_OF"),
             ("Fische leben im Meer", 0.89, "LOCATED_IN (leben)"),
-
             # Mittlere Confidence (0.70-0.84)
             ("Hunde sind intelligent", 0.78, "HAS_PROPERTY (Adjektiv)"),
             ("Eine Rose ist rot", 0.78, "HAS_PROPERTY (Farbe)"),
@@ -331,9 +315,7 @@ class AdvancedAutonomousAnalyzer:
             correction_str = (
                 f"-> '{corrected_text}'" if has_corrections else "Keine Korrektur"
             )
-            print(
-                f"{status} '{text}' | {description:<25} | {correction_str}"
-            )
+            print(f"{status} '{text}' | {description:<25} | {correction_str}")
 
         print(
             f"\n[INFO] Pattern Orchestrator nutzt adaptive Thresholds "
@@ -352,18 +334,18 @@ class AdvancedAutonomousAnalyzer:
             # Inverse Relations
             ("Deutschland enthält Berlin", "CONTAINS (Inverse von LOCATED_IN)", False),
             ("Tiere umfassen Hunde", "INCLUDES (Inverse von IS_A)", False),
-
             # Sibling Relations
-            ("Hunde und Katzen sind beides Haustiere", "SIBLING (gemeinsames Parent)", False),
-
+            (
+                "Hunde und Katzen sind beides Haustiere",
+                "SIBLING (gemeinsames Parent)",
+                False,
+            ),
             # Degree/Intensity
             ("Eis ist sehr kalt", "DEGREE (Intensität)", False),
             ("Ein Gepard ist extrem schnell", "DEGREE (Superlativ)", False),
-
             # Conditional Properties
             ("Wasser ist flüssig bei Raumtemperatur", "CONDITIONAL_PROPERTY", False),
             ("Metall leitet Strom", "GENERAL_PROPERTY", True),
-
             # Multi-hop Relations
             ("Ein Pudel ist ein Hund ist ein Tier", "TRANSITIVE IS_A", False),
         ]
@@ -388,9 +370,7 @@ class AdvancedAutonomousAnalyzer:
                 status = "[FEHLT]" if should_detect else "[ERWARTET]"
 
             detection_str = f"Erkannt ({relation})" if is_detected else "Nicht erkannt"
-            print(
-                f"{status} {sentence[:50]:<50} | {category:<30} | {detection_str}"
-            )
+            print(f"{status} {sentence[:50]:<50} | {category:<30} | {detection_str}")
 
         print(
             f"\n[BEWERTUNG] Erweiterte Relationen sind größtenteils noch nicht implementiert"

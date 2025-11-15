@@ -11,6 +11,7 @@ from component_54_production_system import (
     create_all_content_selection_rules,
 )
 
+
 def test_introspection_queries():
     """Test IntrospectionStrategy mit verschiedenen Queries."""
     print("=" * 80)
@@ -41,8 +42,16 @@ def test_introspection_queries():
     # Test verschiedene Introspektions-Queries
     test_queries = [
         ("Alle Regeln", "query_production_rules", {}),
-        ("Content-Selection", "query_production_rules", {"category": "content_selection"}),
-        ("Top 5 meistverwendet", "query_production_rules", {"min_application_count": 1, "order_by": "usage", "limit": 5}),
+        (
+            "Content-Selection",
+            "query_production_rules",
+            {"category": "content_selection"},
+        ),
+        (
+            "Top 5 meistverwendet",
+            "query_production_rules",
+            {"min_application_count": 1, "order_by": "usage", "limit": 5},
+        ),
         ("Niedrige Utility", "query_production_rules", {"max_utility": 0.5}),
         ("Statistiken", "get_production_rule_statistics", {}),
     ]
@@ -60,13 +69,16 @@ def test_introspection_queries():
             print(f"Ergebnisse: {len(result)} Regeln")
             if result:
                 for rule in result[:3]:
-                    print(f"  - {rule['name']} (util={rule['utility']:.2f}, apps={rule['application_count']})")
+                    print(
+                        f"  - {rule['name']} (util={rule['utility']:.2f}, apps={rule['application_count']})"
+                    )
         print()
 
     # Cleanup
     netzwerk.close()
     print("✓ Test abgeschlossen\n")
     print("=" * 80)
+
 
 if __name__ == "__main__":
     test_introspection_queries()
