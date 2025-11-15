@@ -428,6 +428,120 @@ class TestGoalPlanner:
 
         logger.info("[SUCCESS] Confidence Threshold Grenzen korrekt: 0.4 und 0.8")
 
+    def test_updated_confidence_thresholds_2024_11(self):
+        """
+        BUG FIX TEST: Neue niedrigere Schwellenwerte (0.3/0.7 statt 0.4/0.8).
+        Dies reduziert "ich bin mir unsicher"-Fragen bei komplexen Inputs.
+        """
+        from component_4_goal_planner import GoalPlanner
+        from component_5_linguistik_strukturen import (
+            GoalType,
+            MeaningPoint,
+            MeaningPointCategory,
+            Modality,
+            Polarity,
+        )
+
+        planner = GoalPlanner()
+
+        # Test 1: Confidence 0.75 -> Direct Execution (vorher: Confirmation)
+        mp_075 = MeaningPoint(
+            id="test-075",
+            category=MeaningPointCategory.QUESTION,
+            cue="was",
+            text_span="Was ist ein Apfel?",
+            modality=Modality.INTERROGATIVE,
+            polarity=Polarity.POSITIVE,
+            confidence=0.75,
+            arguments={"topic": "apfel"},
+        )
+        plan_075 = planner.create_plan(mp_075)
+        assert plan_075.type == GoalType.ANSWER_QUESTION
+        assert (
+            "[Bestätigung erforderlich]" not in plan_075.description
+        ), "Bei Confidence 0.75 sollte KEINE Bestätigung erforderlich sein (neue Schwelle: 0.7)"
+        logger.info("[OK] Confidence 0.75 -> Direct Execution (neue Schwelle 0.7)")
+
+        # Test 2: Confidence 0.65 -> Confirmation (vorher: Confirmation)
+        mp_065 = MeaningPoint(
+            id="test-065",
+            category=MeaningPointCategory.QUESTION,
+            cue="was",
+            text_span="Was ist ein Apfel?",
+            modality=Modality.INTERROGATIVE,
+            polarity=Polarity.POSITIVE,
+            confidence=0.65,
+            arguments={"topic": "apfel"},
+        )
+        plan_065 = planner.create_plan(mp_065)
+        assert plan_065.type == GoalType.ANSWER_QUESTION
+        assert "[Bestätigung erforderlich]" in plan_065.description
+        logger.info("[OK] Confidence 0.65 -> Confirmation")
+
+        # Test 3: Confidence 0.35 -> Confirmation (vorher: Clarification!)
+        mp_035 = MeaningPoint(
+            id="test-035",
+            category=MeaningPointCategory.QUESTION,
+            cue="was",
+            text_span="Was ist ein Apfel?",
+            modality=Modality.INTERROGATIVE,
+            polarity=Polarity.POSITIVE,
+            confidence=0.35,
+            arguments={"topic": "apfel"},
+        )
+        plan_035 = planner.create_plan(mp_035)
+        assert (
+            plan_035.type != GoalType.CLARIFY_INTENT
+        ), "Bei Confidence 0.35 sollte KEINE Clarification sein (neue Schwelle: 0.3)"
+        assert plan_035.type == GoalType.ANSWER_QUESTION
+        logger.info("[OK] Confidence 0.35 -> Confirmation (keine Clarification mehr)")
+
+        # Test 4: Confidence 0.25 -> Clarification
+        mp_025 = MeaningPoint(
+            id="test-025",
+            category=MeaningPointCategory.QUESTION,
+            cue="was",
+            text_span="Was ist ein Apfel?",
+            modality=Modality.INTERROGATIVE,
+            polarity=Polarity.POSITIVE,
+            confidence=0.25,
+            arguments={"topic": "apfel"},
+        )
+        plan_025 = planner.create_plan(mp_025)
+        assert (
+            plan_025.type == GoalType.CLARIFY_INTENT
+        ), "Bei Confidence 0.25 sollte Clarification erfolgen"
+        logger.info("[OK] Confidence 0.25 -> Clarification")
+
+        # Test 5: Auto-detected Definitions - neue Schwelle 0.75 (statt 0.85)
+        mp_def_078 = MeaningPoint(
+            id="test-def-078",
+            category=MeaningPointCategory.DEFINITION,
+            cue="ist",
+            text_span="Ein Apfel ist eine Frucht",
+            modality=Modality.DECLARATIVE,
+            polarity=Polarity.POSITIVE,
+            confidence=0.78,
+            arguments={
+                "subject": "apfel",
+                "relation_type": "IS_A",
+                "object": "frucht",
+                "auto_detected": True,
+            },
+        )
+        plan_def_078 = planner.create_plan(mp_def_078)
+        assert plan_def_078.type == GoalType.LEARN_KNOWLEDGE
+        assert (
+            "[Bestätigung erforderlich]" not in plan_def_078.description
+        ), "Bei auto-detected Definition mit 0.78 sollte KEINE Bestätigung erforderlich sein (neue Schwelle: 0.75)"
+        logger.info(
+            "[OK] Auto-detected Definition 0.78 -> Direct Save (neue Schwelle 0.75)"
+        )
+
+        logger.info(
+            "[SUCCESS] Alle neuen Confidence-Schwellenwerte korrekt (0.3/0.7/0.75)"
+        )
+
 
 # ============================================================================
 # TESTS FÜR MEANING EXTRACTOR (component_7_meaning_extractor.py)

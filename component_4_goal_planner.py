@@ -19,14 +19,16 @@ class GoalPlanner:
     basierend auf einer erkannten Nutzerabsicht (MeaningPoint).
 
     Phase 2: Implementiert Confidence Gates für abgestufte Reaktionen:
-    - confidence < 0.4: Clarification (völlige Unsicherheit)
-    - confidence < 0.8: Confirmation (mittlere Unsicherheit)
-    - confidence >= 0.8: Direct execution (hohe Sicherheit)
+    - confidence < 0.3: Clarification (völlige Unsicherheit)
+    - confidence < 0.7: Confirmation (mittlere Unsicherheit)
+    - confidence >= 0.7: Direct execution (hohe Sicherheit)
 
     Phase 3 (Schritt 3): Erweitert für autonomes Lernen:
-    - Auto-erkannte Definitionen mit confidence >= 0.85: Direct save
-    - Auto-erkannte Definitionen mit 0.70 <= confidence < 0.85: Confirmation
-    - Auto-erkannte Definitionen mit confidence < 0.70: Clarification
+    - Auto-erkannte Definitionen mit confidence >= 0.75: Direct save
+    - Auto-erkannte Definitionen mit 0.60 <= confidence < 0.75: Confirmation
+    - Auto-erkannte Definitionen mit confidence < 0.60: Clarification
+
+    FIX 2024-11: Schwellenwerte gesenkt um zu häufige "ich bin mir unsicher"-Fragen zu vermeiden
     """
 
     def create_plan(self, meaning_point: MeaningPoint) -> Optional[MainGoal]:
@@ -57,20 +59,22 @@ class GoalPlanner:
                 logger.info("UNKNOWN category detected -> Clarification Plan")
                 return self._plan_for_clarification(meaning_point)
 
-            # GATE 1: Low confidence (< 0.4) -> Ask for clarification
-            if confidence < 0.4:
+            # GATE 1: Low confidence (< 0.3) -> Ask for clarification
+            # FIX 2024-11: Gesenkt von 0.4 auf 0.3 um weniger oft nach Klärung zu fragen
+            if confidence < 0.3:
                 logger.info(f"Low confidence ({confidence:.2f}) -> Clarification Plan")
                 return self._plan_for_clarification(meaning_point)
 
-            # GATE 2: Medium confidence (< 0.85 for auto-detected definitions, < 0.8 for others) -> Request confirmation
+            # GATE 2: Medium confidence (< 0.75 for auto-detected definitions, < 0.7 for others) -> Request confirmation
             # PHASE 3 (Schritt 3): Spezialbehandlung für auto-erkannte Definitionen
+            # FIX 2024-11: Schwellenwerte gesenkt (0.85->0.75, 0.8->0.7) um weniger Bestätigungen zu verlangen
             confirmation_threshold = (
-                0.85
+                0.75
                 if (
                     category == MeaningPointCategory.DEFINITION
                     and meaning_point.arguments.get("auto_detected")
                 )
-                else 0.8
+                else 0.7
             )
 
             if confidence < confirmation_threshold:
@@ -85,7 +89,7 @@ class GoalPlanner:
                     # Fallback to clarification if no base plan available
                     return self._plan_for_clarification(meaning_point)
 
-            # GATE 3: High confidence (>= 0.85 for auto-detected definitions, >= 0.8 for others) -> Direct execution
+            # GATE 3: High confidence (>= 0.75 for auto-detected definitions, >= 0.7 for others) -> Direct execution
             logger.info(
                 f"High confidence ({confidence:.2f}, threshold={confirmation_threshold}) -> Direct Execution"
             )

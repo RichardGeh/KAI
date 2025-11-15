@@ -760,7 +760,8 @@ class MeaningPointExtractor:
         try:
             text_lower = text.lower().strip()
 
-            # Filter 1: Ignoriere Fragen (beginnen mit Fragewörtern)
+            # Filter 1: Ignoriere Fragen (enthalten Fragewörter ODER enden mit ?)
+            # FIX: Prüfe ALLE Wörter, nicht nur das erste (für "Hallo Kai, was ist...")
             question_words = [
                 "was",
                 "wer",
@@ -775,9 +776,20 @@ class MeaningPointExtractor:
                 "wieso",
                 "weshalb",
             ]
-            first_word = text_lower.split()[0] if text_lower.split() else ""
-            if first_word in question_words:
+
+            # Prüfe ob Text mit Fragezeichen endet (klares Indiz für Frage)
+            if text.rstrip().endswith("?"):
+                logger.debug("Frage erkannt (Fragezeichen) -> Keine Definition")
                 return []
+
+            # Prüfe ob IRGENDEIN Wort ein Fragewort ist (nicht nur das erste)
+            words = text_lower.split()
+            for word in words[:5]:  # Prüfe erste 5 Wörter (für "Hallo Kai, was...")
+                if word in question_words:
+                    logger.debug(
+                        f"Frage erkannt (Fragewort '{word}') -> Keine Definition"
+                    )
+                    return []
 
             # Filter 2: BEHANDLE Konditionale (NICHT ignorieren!)
             # "Wenn X, dann Y" / "Falls X, (dann) Y" werden jetzt verarbeitet
@@ -1632,12 +1644,14 @@ class MeaningPointExtractor:
             if match_what_is:
                 topic_str_raw = match_what_is.group(1).strip()
                 cleaned_topic = self.text_normalizer.clean_entity(topic_str_raw)
+                # FIX: Höhere Confidence wenn Fragezeichen vorhanden
+                confidence = 0.90 if text.rstrip().endswith("?") else 0.80
                 return [
                     self._create_meaning_point(
                         category=MeaningPointCategory.QUESTION,
                         cue="heuristic_question_wh",
                         text_span=text,
-                        confidence=0.80,
+                        confidence=confidence,
                         arguments={"topic": cleaned_topic},
                     )
                 ]
@@ -1686,12 +1700,15 @@ class MeaningPointExtractor:
 
                 cleaned_topic = self.text_normalizer.clean_entity(topic_str)
 
+                # FIX: Höhere Confidence wenn Fragezeichen vorhanden
+                confidence = 0.90 if text.rstrip().endswith("?") else 0.80
+
                 return [
                     self._create_meaning_point(
                         category=MeaningPointCategory.QUESTION,
                         cue="heuristic_question_wer",
                         text_span=text,
-                        confidence=0.80,
+                        confidence=confidence,
                         arguments={
                             "topic": cleaned_topic,
                             "question_word": "wer",
@@ -1723,12 +1740,15 @@ class MeaningPointExtractor:
 
                 cleaned_topic = self.text_normalizer.clean_entity(topic_str)
 
+                # FIX: Höhere Confidence wenn Fragezeichen vorhanden
+                confidence = 0.90 if text.rstrip().endswith("?") else 0.80
+
                 return [
                     self._create_meaning_point(
                         category=MeaningPointCategory.QUESTION,
                         cue="heuristic_question_wie",
                         text_span=text,
-                        confidence=0.80,
+                        confidence=confidence,
                         arguments={
                             "topic": cleaned_topic,
                             "question_word": "wie",
@@ -1761,12 +1781,15 @@ class MeaningPointExtractor:
 
                 cleaned_topic = self.text_normalizer.clean_entity(topic_str)
 
+                # FIX: Höhere Confidence wenn Fragezeichen vorhanden
+                confidence = 0.90 if text.rstrip().endswith("?") else 0.80
+
                 return [
                     self._create_meaning_point(
                         category=MeaningPointCategory.QUESTION,
                         cue=f"heuristic_question_{question_word}",
                         text_span=text,
-                        confidence=0.80,
+                        confidence=confidence,
                         arguments={
                             "topic": cleaned_topic,
                             "question_word": question_word,
@@ -1798,12 +1821,15 @@ class MeaningPointExtractor:
 
                 cleaned_topic = self.text_normalizer.clean_entity(topic_str)
 
+                # FIX: Höhere Confidence wenn Fragezeichen vorhanden
+                confidence = 0.90 if text.rstrip().endswith("?") else 0.80
+
                 return [
                     self._create_meaning_point(
                         category=MeaningPointCategory.QUESTION,
                         cue="heuristic_question_wann",
                         text_span=text,
-                        confidence=0.80,
+                        confidence=confidence,
                         arguments={
                             "topic": cleaned_topic,
                             "question_word": "wann",
