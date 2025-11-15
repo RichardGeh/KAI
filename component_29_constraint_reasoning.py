@@ -761,3 +761,226 @@ def custom_constraint(
         Custom constraint
     """
     return Constraint(name=name, scope=scope, predicate=predicate)
+
+
+# =============================================================================
+# Constraint Translation (LogicalConstraint -> CSP)
+# =============================================================================
+
+
+def translate_logical_constraints_to_csp(constraint_problem_obj):
+    """
+    Uebersetzt ein LogicalConstraint-Problem (component_60) in ein CSP-Problem.
+
+    Diese Funktion dient als Bruecke zwischen dem generischen Constraint-Detector
+    (component_60_constraint_detector) und dem CSP-Solver (component_29).
+
+    Args:
+        constraint_problem_obj: ConstraintProblem aus component_60 mit:
+            - variables: Dict[str, LogicalVariable]
+            - constraints: List[LogicalConstraint]
+            - context: str (original text)
+
+    Returns:
+        ConstraintProblem (CSP) mit Variables und Constraints fuer den Solver
+
+    Beispiel:
+        >>> from component_60_constraint_detector import ConstraintDetector
+        >>> detector = ConstraintDetector()
+        >>> text = "Wenn Leo Brandy bestellt, bestellt Mark auch einen. Mark oder Nick, aber nie beide."
+        >>> problem = detector.detect_constraint_problem(text)
+        >>> csp_problem = translate_logical_constraints_to_csp(problem)
+        >>> solver = CSPSolver()
+        >>> solution = solver.solve(csp_problem)
+    """
+    # Erstelle CSP Variables aus LogicalVariables
+    csp_variables = {}
+    for var_name, logical_var in constraint_problem_obj.variables.items():
+        # Konvertiere domain zu set (falls noch nicht)
+        domain = (
+            logical_var.domain
+            if isinstance(logical_var.domain, set)
+            else set(logical_var.domain)
+        )
+
+        # Falls domain leer ist, nutze default boolean domain
+        if not domain:
+            domain = {"true", "false", "1", "0"}
+
+        csp_variables[var_name] = Variable(
+            name=var_name, domain=domain, value=logical_var.value
+        )
+
+    # Uebersetze LogicalConstraints zu CSP Constraints
+    csp_constraints = []
+
+    for logical_constraint in constraint_problem_obj.constraints:
+        constraint_type = logical_constraint.constraint_type
+        logical_constraint.variables
+        conditions = logical_constraint.conditions
+
+        if constraint_type == "IMPLIES":
+            # A IMPLIES B: Wenn A dann B
+            # Logik: NOT A OR B
+            premise = conditions.get("premise", "")
+            conclusion = conditions.get("conclusion", "")
+
+            # Extrahiere Variablen-Namen aus premise/conclusion
+            # (vereinfacht: nutze erste gefundene Variable)
+            var_a = _extract_variable_from_text(
+                premise, constraint_problem_obj.variables
+            )
+            var_b = _extract_variable_from_text(
+                conclusion, constraint_problem_obj.variables
+            )
+
+            if var_a and var_b:
+
+                def implies_predicate(assignment, a=var_a, b=var_b):
+                    val_a = assignment.get(a)
+                    val_b = assignment.get(b)
+                    # A -> B entspricht: NOT A OR B
+                    # Wenn A aktiv ist, muss B auch aktiv sein
+                    return _is_false(val_a) or _is_true(val_b)
+
+                csp_constraints.append(
+                    Constraint(
+                        name=f"{var_a} IMPLIES {var_b}",
+                        scope=[var_a, var_b],
+                        predicate=implies_predicate,
+                    )
+                )
+
+        elif constraint_type == "XOR":
+            # A XOR B: Entweder A oder B, aber nicht beide
+            a = conditions.get("a", "")
+            b = conditions.get("b", "")
+
+            var_a = _extract_variable_from_text(a, constraint_problem_obj.variables)
+            var_b = _extract_variable_from_text(b, constraint_problem_obj.variables)
+
+            if var_a and var_b:
+
+                def xor_predicate(assignment, a=var_a, b=var_b):
+                    val_a = assignment.get(a)
+                    val_b = assignment.get(b)
+                    # XOR: (A AND NOT B) OR (NOT A AND B)
+                    a_true = _is_true(val_a)
+                    b_true = _is_true(val_b)
+                    return (a_true and not b_true) or (not a_true and b_true)
+
+                csp_constraints.append(
+                    Constraint(
+                        name=f"{var_a} XOR {var_b}",
+                        scope=[var_a, var_b],
+                        predicate=xor_predicate,
+                    )
+                )
+
+        elif constraint_type == "AND":
+            # A AND B: Beide muessen wahr sein
+            a = conditions.get("a", "")
+            b = conditions.get("b", "")
+
+            var_a = _extract_variable_from_text(a, constraint_problem_obj.variables)
+            var_b = _extract_variable_from_text(b, constraint_problem_obj.variables)
+
+            if var_a and var_b:
+
+                def and_predicate(assignment, a=var_a, b=var_b):
+                    # A AND B: Beide muessen wahr sein
+                    return _is_true(assignment.get(a)) and _is_true(assignment.get(b))
+
+                csp_constraints.append(
+                    Constraint(
+                        name=f"{var_a} AND {var_b}",
+                        scope=[var_a, var_b],
+                        predicate=and_predicate,
+                    )
+                )
+
+        elif constraint_type == "OR":
+            # A OR B: Mindestens einer muss wahr sein
+            a = conditions.get("a", "")
+            b = conditions.get("b", "")
+
+            var_a = _extract_variable_from_text(a, constraint_problem_obj.variables)
+            var_b = _extract_variable_from_text(b, constraint_problem_obj.variables)
+
+            if var_a and var_b:
+
+                def or_predicate(assignment, a=var_a, b=var_b):
+                    # A OR B: Mindestens einer muss wahr sein
+                    return _is_true(assignment.get(a)) or _is_true(assignment.get(b))
+
+                csp_constraints.append(
+                    Constraint(
+                        name=f"{var_a} OR {var_b}",
+                        scope=[var_a, var_b],
+                        predicate=or_predicate,
+                    )
+                )
+
+        elif constraint_type == "NOT":
+            # NOT A: A muss falsch sein
+            negated = conditions.get("negated", "")
+            var = _extract_variable_from_text(negated, constraint_problem_obj.variables)
+
+            if var:
+
+                def not_predicate(assignment, v=var):
+                    return _is_false(assignment.get(v))
+
+                csp_constraints.append(
+                    Constraint(name=f"NOT {var}", scope=[var], predicate=not_predicate)
+                )
+
+    # Erstelle CSP-Problem
+    csp_problem = ConstraintProblem(
+        variables=csp_variables,
+        constraints=csp_constraints,
+        name=f"LogicPuzzle (confidence={constraint_problem_obj.confidence:.2f})",
+    )
+
+    logger.info(
+        f"[CSP-Translation] | "
+        f"variables={len(csp_variables)}, constraints={len(csp_constraints)}"
+    )
+
+    return csp_problem
+
+
+def _extract_variable_from_text(text: str, variables: Dict) -> Optional[str]:
+    """
+    Extrahiert Variablen-Namen aus Text-Fragment.
+
+    Args:
+        text: Text-Fragment (z.B. "Leo bestellt Brandy")
+        variables: Dict von LogicalVariable objekten
+
+    Returns:
+        Variablen-Name wenn gefunden, sonst None
+    """
+    text_lower = text.lower()
+    for var_name in variables.keys():
+        if var_name.lower() in text_lower:
+            return var_name
+    return None
+
+
+def _is_true(value) -> bool:
+    """Prueft ob Wert als 'true' interpretiert werden soll."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.lower() in {"true", "1", "aktiv", "an", "oben", "ja", "yes"}
+    return bool(value)
+
+
+def _is_false(value) -> bool:
+    """Prueft ob Wert als 'false' interpretiert werden soll."""
+    if value is None:
+        return True  # Unassigned gilt als false
+    return not _is_true(value)

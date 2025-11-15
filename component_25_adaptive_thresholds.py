@@ -186,24 +186,24 @@ class AdaptiveThresholdManager:
 
         if phase == BootstrapPhase.COLD_START:
             return {
-                "auto_correct": 0.95,
-                "ask_user": 0.80,
+                "auto_correct": 999.0,  # FIX: Komplett deaktiviert (unmöglich zu erreichen) - Auto-Korrektur ist kaputt
+                "ask_user": 0.85,  # Frage bei hoher Confidence
                 "min_confidence": 0.70,
-                "description": "cold_start: Sehr konservativ",
+                "description": "cold_start: Keine Auto-Korrektur (nur ask_user)",
             }
         elif phase == BootstrapPhase.WARMING:
             return {
-                "auto_correct": 0.85,
-                "ask_user": 0.60,
+                "auto_correct": 999.0,  # FIX: Komplett deaktiviert - verhindert falsche Auto-Korrekturen
+                "ask_user": 0.70,  # Frage bei mittlerer Confidence
                 "min_confidence": 0.50,
-                "description": "warming: Standard",
+                "description": "warming: Keine Auto-Korrektur (nur ask_user)",
             }
         else:  # MATURE
             return {
-                "auto_correct": 0.75,
-                "ask_user": 0.50,
+                "auto_correct": 999.0,  # FIX: Komplett deaktiviert - Auto-Korrektur macht mehr kaputt als sie hilft
+                "ask_user": 0.70,  # Frage bei mittlerer Confidence
                 "min_confidence": 0.40,
-                "description": "mature: Aggressiv",
+                "description": "mature: Keine Auto-Korrektur (nur ask_user)",
             }
 
     def get_bootstrap_confidence_multiplier(

@@ -16,6 +16,12 @@ from PySide6.QtCore import QObject, Signal, Slot
 from component_1_netzwerk import KonzeptNetzwerk
 from component_4_goal_planner import GoalPlanner
 from component_5_linguistik_strukturen import (
+    Modality,  # FIX: Required for MeaningPoint creation
+)
+from component_5_linguistik_strukturen import (
+    Polarity,  # FIX: Required for MeaningPoint creation
+)
+from component_5_linguistik_strukturen import (
     ContextAction,
     GoalStatus,
     KaiContext,
@@ -43,6 +49,9 @@ from component_26_command_suggestions import get_command_suggester
 
 # Import Input Orchestrator for multi-segment processing
 from component_41_input_orchestrator import InputOrchestrator
+
+# Import Constraint Detector for logic puzzle recognition
+from component_60_constraint_detector import ConstraintDetector
 from kai_config import get_config
 from kai_context_manager import KaiContextManager
 
@@ -202,6 +211,13 @@ class KaiWorker(QObject):
             # Input Orchestrator für Multi-Segment-Verarbeitung (Logik-Rätsel)
             self.input_orchestrator = InputOrchestrator(preprocessor=self.preprocessor)
             logger.info("Input Orchestrator aktiviert (für komplexe Eingaben)")
+
+            # Constraint Detector für Logik-Puzzle-Erkennung
+            self.constraint_detector = ConstraintDetector(
+                min_conditional_rules=2,  # Mindestens 2 CONDITIONAL-Pattern (optimiert)
+                confidence_threshold=0.65,  # 65% Confidence erforderlich (optimiert)
+            )
+            logger.info("Constraint Detector aktiviert (min_rules=2, threshold=0.65)")
 
             # PHASE 9: Production System Engine mit Neo4j Repository
             from component_54_production_system import (
@@ -386,6 +402,8 @@ class KaiWorker(QObject):
                     category=MeaningPointCategory.DEFINITION,
                     cue="input_orchestrator",
                     text_span=cleaned_query,
+                    modality=Modality.DECLARATIVE,  # FIX: Required parameter
+                    polarity=Polarity.POSITIVE,  # FIX: Required parameter
                     confidence=0.9,
                     arguments={"orchestrated": True, "segment_count": len(segments)},
                 )
@@ -395,6 +413,39 @@ class KaiWorker(QObject):
                 final_response = self.execute_plan(orchestrated_plan, dummy_intent)
                 self.signals.finished.emit(final_response)
                 return
+
+            # ===================================================================
+            # PHASE: CONSTRAINT DETECTION (Neu für Logik-Puzzle)
+            # ===================================================================
+            # Prüfe ob Eingabe ein Constraint-Problem darstellt (z.B. Logik-Rätsel)
+            constraint_problem = self.constraint_detector.detect_constraint_problem(
+                text=cleaned_query
+            )
+
+            if constraint_problem:
+                logger.info(
+                    f"[Constraint-Problem erkannt] | "
+                    f"variables={len(constraint_problem.variables)}, "
+                    f"constraints={len(constraint_problem.constraints)}, "
+                    f"confidence={constraint_problem.confidence:.2f}"
+                )
+                # Speichere Constraint-Problem in Working Memory für Reasoning-Orchestrator
+                self.working_memory.add_reasoning_state(
+                    step_type="constraint_problem_detected",
+                    description=f"Logik-Puzzle mit {len(constraint_problem.variables)} Variablen erkannt",
+                    data={"problem": constraint_problem},
+                    confidence=constraint_problem.confidence,
+                )
+
+                # Signal fuer UI (Inner Picture Display)
+                constraint_summary = (
+                    f"[CONSTRAINT-PROBLEM ERKANNT]\n"
+                    f"  Variablen: {', '.join(constraint_problem.variables.keys())}\n"
+                    f"  Constraints: {len(constraint_problem.constraints)} "
+                    f"({', '.join(c.constraint_type for c in constraint_problem.constraints)})\n"
+                    f"  Confidence: {constraint_problem.confidence:.2%}"
+                )
+                self.signals.inner_picture_update.emit(constraint_summary)
 
             # ===================================================================
             # NORMALE VERARBEITUNG (wie bisher)
@@ -428,6 +479,10 @@ class KaiWorker(QObject):
                     )
                 )
                 return
+
+            # Füge Constraint-Problem zum Intent hinzu (falls erkannt)
+            if constraint_problem:
+                primary_intent.arguments["constraint_problem"] = constraint_problem
 
             final_response = self.execute_plan(plan, primary_intent)
             self.signals.finished.emit(final_response)

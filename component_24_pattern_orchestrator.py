@@ -227,19 +227,18 @@ class PatternOrchestrator:
             if candidates and len(candidates) > 0:
                 best = candidates[0]
 
-                if best["confidence"] >= self.typo_auto_correct_threshold:
-                    # Auto-Korrektur
-                    corrected_words.append(best["word"])
-                    result["typo_corrections"].append(
-                        {
-                            "original": word,
-                            "correction": best["word"],
-                            "confidence": best["confidence"],
-                            "decision": "auto_corrected",
-                        }
-                    )
-                elif best["confidence"] >= self.typo_ask_user_threshold:
-                    # Rückfrage
+                # FIX 2024-11: Auto-Korrektur komplett deaktiviert - zu viele falsche Matches
+                # Problem: "zur" -> "tür", "gelegt" -> "belebt", "sofern" -> "eltern" mit 1.00 Confidence
+                # Lösung: IMMER ask_user, NIEMALS auto_correct
+
+                # DEAKTIVIERT: Auto-Korrektur
+                # if best["confidence"] >= self.typo_auto_correct_threshold:
+                #     corrected_words.append(best["word"])
+                #     result["typo_corrections"].append(...)
+
+                # FORCIERT: Immer ask_user (wenn Confidence hoch genug)
+                if best["confidence"] >= self.typo_ask_user_threshold:
+                    # Rückfrage (IMMER, auch bei hoher Confidence)
                     corrected_words.append(word)  # Nutze Original
                     result["typo_corrections"].append(
                         {
@@ -250,6 +249,7 @@ class PatternOrchestrator:
                     )
                     result["needs_user_clarification"] = True
                 else:
+                    # Confidence zu niedrig -> ignoriere
                     corrected_words.append(word)
             else:
                 corrected_words.append(word)

@@ -467,20 +467,29 @@ class ResonanceEngine:
         """
 
         try:
-            result = self.netzwerk.execute_query(
-                cypher,
-                {
-                    "lemma": concept,
-                    "allowed_relations": allowed_relations,
-                    "current_activation": current_activation,
-                    "activation_threshold": self.activation_threshold,
-                },
-            )
+            # FIX 2024-11: execute_query existiert nicht mehr
+            # Verwende direkten Neo4j Session Zugriff
+            if not hasattr(self.netzwerk, "_driver"):
+                logger.warning(
+                    "KonzeptNetzwerk hat keinen _driver - Resonance deaktiviert"
+                )
+                return []
 
-            neighbors = [
-                (r["neighbor"], r["relation_type"], r["base_confidence"])
-                for r in result
-            ]
+            with self.netzwerk._driver.session() as session:
+                result = session.run(
+                    cypher,
+                    {
+                        "lemma": concept,
+                        "allowed_relations": allowed_relations,
+                        "current_activation": current_activation,
+                        "activation_threshold": self.activation_threshold,
+                    },
+                )
+
+                neighbors = [
+                    (r["neighbor"], r["relation_type"], r["base_confidence"])
+                    for r in result
+                ]
 
             # Cache Write (mit Size-Limit)
             if len(self._neighbors_cache) >= self._neighbors_cache_max_size:

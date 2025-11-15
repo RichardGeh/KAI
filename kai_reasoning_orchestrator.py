@@ -81,6 +81,7 @@ class ReasoningStrategy(Enum):
     COMBINATORIAL = "combinatorial"  # Strategic/combinatorial reasoning
     SPATIAL = "spatial"  # Spatial reasoning (grids, shapes, positions)
     RESONANCE = "resonance"  # Spreading activation with resonance amplification
+    CONSTRAINT = "constraint"  # Constraint satisfaction (logic puzzles, CSP)
 
 
 @dataclass
@@ -200,6 +201,7 @@ class ReasoningOrchestrator:
             ReasoningStrategy.LOGIC_ENGINE: 0.18,
             ReasoningStrategy.GRAPH_TRAVERSAL: 0.14,
             ReasoningStrategy.RESONANCE: 0.12,  # Spreading activation
+            ReasoningStrategy.CONSTRAINT: 0.11,  # CSP solving for logic puzzles
             ReasoningStrategy.SPATIAL: 0.10,
             ReasoningStrategy.COMBINATORIAL: 0.07,
             ReasoningStrategy.PROBABILISTIC: 0.03,
@@ -261,6 +263,7 @@ class ReasoningOrchestrator:
                 ReasoningStrategy.GRAPH_TRAVERSAL,
                 ReasoningStrategy.LOGIC_ENGINE,
                 ReasoningStrategy.RESONANCE,
+                ReasoningStrategy.CONSTRAINT,
                 ReasoningStrategy.SPATIAL,
                 ReasoningStrategy.PROBABILISTIC,
                 ReasoningStrategy.ABDUCTIVE,
@@ -347,6 +350,11 @@ class ReasoningOrchestrator:
                 spatial_result = self._try_spatial_reasoning(topic, relation_type)
                 if spatial_result and spatial_result.success:
                     deterministic_results.append(spatial_result)
+
+            if ReasoningStrategy.CONSTRAINT in strategies:
+                constraint_result = self._try_constraint_solving(topic, relation_type)
+                if constraint_result and constraint_result.success:
+                    deterministic_results.append(constraint_result)
 
             if ReasoningStrategy.RESONANCE in strategies:
                 resonance_result = self._try_resonance(topic, relation_type)
@@ -513,16 +521,20 @@ class ReasoningOrchestrator:
                     result, query_for_ml, topic, context
                 )
 
+                # FIX 2024-11: recommendation kann String oder Enum sein
+                recommendation_value = (
+                    eval_result.recommendation.value
+                    if hasattr(eval_result.recommendation, "value")
+                    else str(eval_result.recommendation)
+                )
+
                 logger.info(
                     f"[Self-Evaluation] Score: {eval_result.overall_score:.2f}, "
-                    f"Recommendation: {eval_result.recommendation.value}"
+                    f"Recommendation: {recommendation_value}"
                 )
 
                 # Check if we should retry with different strategy
-                if (
-                    eval_result.recommendation.value
-                    == "retry_different_strategy"  # Use .value
-                ):
+                if recommendation_value == "retry_different_strategy":
                     logger.info(
                         f"[Self-Evaluation] Recommends retry, attempting different strategy "
                         f"(attempt {retry_count + 1})"
@@ -1128,6 +1140,116 @@ class ReasoningOrchestrator:
 
         except Exception as e:
             logger.warning(f"[Spatial Reasoning] Fehler: {e}")
+            return None
+
+    def _try_constraint_solving(
+        self, topic: str, relation_type: str = None
+    ) -> Optional[ReasoningResult]:
+        """
+        Constraint Satisfaction Problem (CSP) solving for logic puzzles.
+
+        Checks if there is a constraint_problem in the working memory
+        (detected by ConstraintDetector in kai_worker.py). If yes, attempts
+        to solve it using the CSP solver.
+
+        Note: Most of the constraint solving logic is handled in
+        ConstraintSolvingStrategy (kai_sub_goal_executor.py) which has
+        direct access to the intent context. This method provides a
+        fallback for reasoning orchestrator calls.
+
+        Args:
+            topic: The query topic (e.g., "Leo", "Schalter 3")
+            relation_type: Optional relation type (not used for CSP)
+
+        Returns:
+            ReasoningResult with solution or None
+        """
+        logger.debug(f"[Constraint Solving] Topic: {topic}")
+
+        try:
+            # Check if there is a constraint problem in working memory
+            states = self.working_memory.get_reasoning_states()
+            constraint_problem = None
+
+            for state in states:
+                if state.step_type == "constraint_problem_detected":
+                    constraint_problem = state.data.get("problem")
+                    break
+
+            if not constraint_problem:
+                logger.debug("[Constraint Solving] Kein Constraint-Problem im Kontext")
+                return None
+
+            # Import CSP solver and translator
+            from component_29_constraint_reasoning import (
+                ConstraintSolver,
+                translate_logical_constraints_to_csp,
+            )
+
+            # Translate logical constraints to CSP
+            csp_problem = translate_logical_constraints_to_csp(constraint_problem)
+
+            # Solve CSP
+            solver = ConstraintSolver(use_ac3=True, use_mrv=True, use_lcv=True)
+            solution = solver.solve(csp_problem)
+
+            if solution:
+                # Format solution as inferred facts
+                inferred_facts = {}
+                for var_name, value in solution.items():
+                    # Create a "HAS_VALUE" relation for each variable
+                    if "HAS_VALUE" not in inferred_facts:
+                        inferred_facts["HAS_VALUE"] = []
+                    inferred_facts["HAS_VALUE"].append(f"{var_name}={value}")
+
+                # Track in working memory
+                self.working_memory.add_reasoning_state(
+                    step_type="constraint_solving",
+                    description=f"CSP-Lösung für {len(solution)} Variablen gefunden",
+                    data={
+                        "solution": solution,
+                        "confidence": constraint_problem.confidence,
+                    },
+                    confidence=constraint_problem.confidence,
+                )
+
+                # Create proof tree if available
+                proof_tree = None
+                if PROOF_SYSTEM_AVAILABLE:
+                    proof_tree = ProofTree(query=f"Constraint-Lösung für {topic}")
+
+                    # Add solution steps
+                    for var_name, value in solution.items():
+                        step = UnifiedProofStep(
+                            step_type=StepType.QUERY,
+                            description=f"{var_name} = {value}",
+                            confidence=constraint_problem.confidence,
+                            metadata={
+                                "source": "constraint_solving",
+                                "csp_variables": len(solution),
+                            },
+                        )
+                        proof_tree.add_root_step(step)
+
+                return ReasoningResult(
+                    strategy=ReasoningStrategy.CONSTRAINT,
+                    success=True,
+                    confidence=constraint_problem.confidence,
+                    inferred_facts=inferred_facts,
+                    proof_tree=proof_tree,
+                    proof_trace=f"CSP-Lösung: {len(solution)} Variablen gelöst",
+                    metadata={
+                        "solution": solution,
+                        "csp_variables": len(solution),
+                        "csp_constraints": len(csp_problem.constraints),
+                    },
+                )
+
+            logger.debug("[Constraint Solving] Keine Lösung gefunden")
+            return None
+
+        except Exception as e:
+            logger.warning(f"[Constraint Solving] Fehler: {e}")
             return None
 
     def _try_resonance(
