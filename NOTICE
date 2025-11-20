@@ -47,6 +47,12 @@ Copyright (C) Steve Canny
 License: MIT License
 Homepage: https://github.com/python-openxml/python-docx
 
+--------------------------------------------------------------------------------
+cachetools
+Copyright (C) 2014-2025 Thomas Kemmer
+License: MIT License
+Homepage: https://github.com/tkem/cachetools
+
 ================================================================================
 
 For a complete list of dependencies, see requirements.txt and requirements-dev.txt
