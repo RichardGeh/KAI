@@ -15,7 +15,7 @@ Statistische Grundlage:
 
 import math
 from enum import Enum
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from component_15_logging_config import get_logger
 
@@ -186,22 +186,22 @@ class AdaptiveThresholdManager:
 
         if phase == BootstrapPhase.COLD_START:
             return {
-                "auto_correct": 999.0,  # FIX: Komplett deaktiviert (unmöglich zu erreichen) - Auto-Korrektur ist kaputt
-                "ask_user": 0.85,  # Frage bei hoher Confidence
+                "auto_correct": 999.0,  # Permanently disabled - ask_user strategy preferred for safety (prevents incorrect automatic corrections)
+                "ask_user": 0.80,  # Frage bei hoher Confidence
                 "min_confidence": 0.70,
                 "description": "cold_start: Keine Auto-Korrektur (nur ask_user)",
             }
         elif phase == BootstrapPhase.WARMING:
             return {
-                "auto_correct": 999.0,  # FIX: Komplett deaktiviert - verhindert falsche Auto-Korrekturen
-                "ask_user": 0.70,  # Frage bei mittlerer Confidence
+                "auto_correct": 999.0,  # Permanently disabled - ask_user strategy preferred for safety (prevents incorrect automatic corrections)
+                "ask_user": 0.60,  # Frage bei mittlerer Confidence
                 "min_confidence": 0.50,
                 "description": "warming: Keine Auto-Korrektur (nur ask_user)",
             }
         else:  # MATURE
             return {
-                "auto_correct": 999.0,  # FIX: Komplett deaktiviert - Auto-Korrektur macht mehr kaputt als sie hilft
-                "ask_user": 0.70,  # Frage bei mittlerer Confidence
+                "auto_correct": 999.0,  # Permanently disabled - ask_user strategy preferred for safety (prevents incorrect automatic corrections)
+                "ask_user": 0.50,  # Frage bei mittlerer Confidence
                 "min_confidence": 0.40,
                 "description": "mature: Keine Auto-Korrektur (nur ask_user)",
             }
@@ -242,7 +242,7 @@ class AdaptiveThresholdManager:
             # Sehr viele Daten -> Max Boost
             return 1.3
 
-    def get_system_stats(self) -> Dict[str, any]:
+    def get_system_stats(self) -> Dict[str, Any]:
         """
         Gibt umfassende System-Statistiken zurück.
 
@@ -280,7 +280,7 @@ class AdaptiveThresholdManager:
             return 0
 
         try:
-            with self.netzwerk.driver.session(database="neo4j") as session:
+            with self.netzwerk.driver.session() as session:
                 query = """
                 MATCH ()-[c:CONNECTION]->()
                 RETURN count(c) AS total

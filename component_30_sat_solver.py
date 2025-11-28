@@ -20,7 +20,7 @@ Date: 2025-10-30
 import logging
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Dict, FrozenSet, List, Optional, Set, Tuple
+from typing import Dict, FrozenSet, List, Optional, Set, Tuple
 
 from component_15_logging_config import get_logger
 
@@ -31,8 +31,36 @@ try:
     PROOF_AVAILABLE = True
 except ImportError:
     PROOF_AVAILABLE = False
-    StepType: Any = None  # type: ignore[no-redef]  # Dummy fallback
-    logging.warning("component_17 not available, proof generation disabled")
+    logging.warning(
+        "component_17 not available, using stub classes for proof generation"
+    )
+
+    # Provide complete stub classes to prevent runtime errors
+    class StepType:
+        """Stub for StepType enum when component_17 not available."""
+
+        PREMISE = "PREMISE"
+        INFERENCE = "INFERENCE"
+        CONCLUSION = "CONCLUSION"
+        ASSUMPTION = "ASSUMPTION"
+        CONTRADICTION = "CONTRADICTION"
+        RULE_APPLICATION = "RULE_APPLICATION"
+
+    class ProofStep:
+        """Stub for ProofStep when component_17 not available."""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+    class ProofTree:
+        """Stub for ProofTree when component_17 not available."""
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def add_root_step(self, step):
+            pass
+
 
 logger = get_logger(__name__)
 
@@ -61,7 +89,7 @@ class Literal:
         return Literal(self.variable, not self.negated)
 
     def __str__(self):
-        return f"{'¬' if self.negated else ''}{self.variable}"
+        return f"{'NOT ' if self.negated else ''}{self.variable}"
 
     def __repr__(self):
         return str(self)
@@ -134,8 +162,8 @@ class Clause:
 
     def __str__(self):
         if self.is_empty():
-            return "⊥"  # Empty clause (FALSE)
-        return " ∨ ".join(str(lit) for lit in sorted(self.literals, key=str))
+            return "[FALSE]"  # Empty clause (FALSE)
+        return " OR ".join(str(lit) for lit in sorted(self.literals, key=str))
 
     def __repr__(self):
         return f"Clause({self.literals})"
@@ -224,8 +252,8 @@ class CNFFormula:
 
     def __str__(self):
         if self.is_empty():
-            return "⊤"  # Empty formula (TRUE)
-        return " ∧ ".join(f"({c})" for c in self.clauses)
+            return "[TRUE]"  # Empty formula (TRUE)
+        return " AND ".join(f"({c})" for c in self.clauses)
 
 
 class PropositionalOperator(Enum):
@@ -253,15 +281,15 @@ class PropositionalFormula:
         if self.variable:
             return self.variable
         if self.operator == PropositionalOperator.NOT:
-            return f"¬{self.operands[0]}"
+            return f"NOT {self.operands[0]}"
         if self.operator == PropositionalOperator.AND:
-            return f"({' ∧ '.join(str(op) for op in self.operands)})"
+            return f"({' AND '.join(str(op) for op in self.operands)})"
         if self.operator == PropositionalOperator.OR:
-            return f"({' ∨ '.join(str(op) for op in self.operands)})"
+            return f"({' OR '.join(str(op) for op in self.operands)})"
         if self.operator == PropositionalOperator.IMPLIES:
-            return f"({self.operands[0]} → {self.operands[1]})"
+            return f"({self.operands[0]} -> {self.operands[1]})"
         if self.operator == PropositionalOperator.IFF:
-            return f"({self.operands[0]} ↔ {self.operands[1]})"
+            return f"({self.operands[0]} <-> {self.operands[1]})"
         return "?"
 
     @classmethod
@@ -330,14 +358,14 @@ class CNFConverter:
     def _eliminate_implications(formula: PropositionalFormula) -> PropositionalFormula:
         """
         Eliminiere Implikationen und Biconditionals.
-        - A → B wird zu ¬A ∨ B
-        - A ↔ B wird zu (A → B) ∧ (B → A) = (¬A ∨ B) ∧ (¬B ∨ A)
+        - A -> B wird zu NOT A OR B
+        - A <-> B wird zu (A -> B) AND (B -> A) = (NOT A OR B) AND (NOT B OR A)
         """
         if formula.variable:
             return formula
 
         if formula.operator == PropositionalOperator.IMPLIES:
-            # A → B = ¬A ∨ B
+            # A -> B = NOT A OR B
             ant = CNFConverter._eliminate_implications(formula.operands[0])
             cons = CNFConverter._eliminate_implications(formula.operands[1])
             return PropositionalFormula.or_formula(
@@ -345,7 +373,7 @@ class CNFConverter:
             )
 
         if formula.operator == PropositionalOperator.IFF:
-            # A ↔ B = (¬A ∨ B) ∧ (¬B ∨ A)
+            # A <-> B = (NOT A OR B) AND (NOT B OR A)
             left = CNFConverter._eliminate_implications(formula.operands[0])
             right = CNFConverter._eliminate_implications(formula.operands[1])
             return PropositionalFormula.and_formula(
@@ -367,9 +395,9 @@ class CNFConverter:
     def _push_negations_inward(formula: PropositionalFormula) -> PropositionalFormula:
         """
         Pushe Negationen nach innen mit De Morgan:
-        - ¬(A ∧ B) = ¬A ∨ ¬B
-        - ¬(A ∨ B) = ¬A ∧ ¬B
-        - ¬¬A = A
+        - NOT (A AND B) = NOT A OR NOT B
+        - NOT (A OR B) = NOT A AND NOT B
+        - NOT NOT A = A
         """
         if formula.variable:
             return formula
@@ -387,15 +415,15 @@ class CNFConverter:
         inner = formula.operands[0]
 
         if inner.variable:
-            # ¬Variable: Fertig
+            # NOT Variable: Fertig
             return formula
 
         if inner.operator == PropositionalOperator.NOT:
-            # ¬¬A = A
+            # NOT NOT A = A
             return CNFConverter._push_negations_inward(inner.operands[0])
 
         if inner.operator == PropositionalOperator.AND:
-            # ¬(A ∧ B) = ¬A ∨ ¬B
+            # NOT (A AND B) = NOT A OR NOT B
             negated_operands = [
                 CNFConverter._push_negations_inward(
                     PropositionalFormula.not_formula(op)
@@ -405,7 +433,7 @@ class CNFConverter:
             return PropositionalFormula.or_formula(*negated_operands)
 
         if inner.operator == PropositionalOperator.OR:
-            # ¬(A ∨ B) = ¬A ∧ ¬B
+            # NOT (A OR B) = NOT A AND NOT B
             negated_operands = [
                 CNFConverter._push_negations_inward(
                     PropositionalFormula.not_formula(op)
@@ -420,7 +448,7 @@ class CNFConverter:
     def _distribute_or_over_and(formula: PropositionalFormula) -> PropositionalFormula:
         """
         Distributiere OR über AND:
-        - A ∨ (B ∧ C) = (A ∨ B) ∧ (A ∨ C)
+        - A OR (B AND C) = (A OR B) AND (A OR C)
         """
         if formula.variable:
             return formula
@@ -458,7 +486,7 @@ class CNFConverter:
             and_operand = operands[and_idx]
             other_operands = operands[:and_idx] + operands[and_idx + 1 :]
 
-            # A ∨ (B ∧ C) = (A ∨ B) ∧ (A ∨ C)
+            # A OR (B AND C) = (A OR B) AND (A OR C)
             distributed = []
             for and_child in and_operand.operands:
                 or_clause = PropositionalFormula.or_formula(and_child, *other_operands)
@@ -934,8 +962,8 @@ class DPLLSolver:
         return False, conflicting
 
     def _add_proof_step(
-        self, step_type, description: str, details: str, confidence: float
-    ):
+        self, step_type: "StepType", description: str, details: str, confidence: float
+    ) -> None:
         """Füge Proof Step hinzu (falls aktiviert)"""
         if not self.enable_proof or not PROOF_AVAILABLE:
             return
@@ -983,18 +1011,18 @@ class SATEncoder:
     @staticmethod
     def encode_implication(antecedent: Literal, consequent: Literal) -> Clause:
         """
-        Encode implication: antecedent → consequent.
+        Encode implication: antecedent -> consequent.
 
-        Equivalent to: ¬antecedent ∨ consequent
+        Equivalent to: NOT antecedent OR consequent
         """
         return Clause({-antecedent, consequent})
 
     @staticmethod
     def encode_iff(lit1: Literal, lit2: Literal) -> List[Clause]:
         """
-        Encode bi-implication: lit1 ↔ lit2.
+        Encode bi-implication: lit1 <-> lit2.
 
-        Equivalent to: (lit1 → lit2) ∧ (lit2 → lit1)
+        Equivalent to: (lit1 -> lit2) AND (lit2 -> lit1)
         """
         return [
             SATEncoder.encode_implication(lit1, lit2),
@@ -1004,9 +1032,9 @@ class SATEncoder:
     @staticmethod
     def encode_xor(lit1: Literal, lit2: Literal) -> List[Clause]:
         """
-        Encode exclusive OR: lit1 ⊕ lit2.
+        Encode exclusive OR: lit1 XOR lit2.
 
-        Equivalent to: (lit1 ∨ lit2) ∧ (¬lit1 ∨ ¬lit2)
+        Equivalent to: (lit1 OR lit2) AND (NOT lit1 OR NOT lit2)
         """
         return [Clause({lit1, lit2}), Clause({-lit1, -lit2})]
 
@@ -1020,7 +1048,7 @@ class SATEncoder:
         clauses = []
         for i in range(len(literals)):
             for j in range(i + 1, len(literals)):
-                # ¬lit_i ∨ ¬lit_j
+                # NOT lit_i OR NOT lit_j
                 clauses.append(Clause({-literals[i], -literals[j]}))
         return clauses
 
@@ -1064,8 +1092,8 @@ class KnowledgeBaseChecker:
         formula = CNFFormula([])
 
         for premises, conclusion in rules:
-            # Rule: (p1 ∧ p2 ∧ ... ∧ pn) → conclusion
-            # CNF: ¬p1 ∨ ¬p2 ∨ ... ∨ ¬pn ∨ conclusion
+            # Rule: (p1 AND p2 AND ... AND pn) -> conclusion
+            # CNF: NOT p1 OR NOT p2 OR ... OR NOT pn OR conclusion
             clause_literals = {-p for p in premises}
             clause_literals.add(conclusion)
             formula.add_clause(Clause(clause_literals))
@@ -1138,30 +1166,30 @@ def create_knights_and_knaves_problem() -> CNFFormula:
     k_B = Literal("k_B")
     k_C = Literal("k_C")
 
-    # A says: "B is a knave" (¬k_B)
-    # If A is knight: B is knave (k_A → ¬k_B)
-    # If A is knave: B is knight (¬k_A → k_B)
-    # Equivalent: k_A ↔ ¬k_B
+    # A says: "B is a knave" (NOT k_B)
+    # If A is knight: B is knave (k_A -> NOT k_B)
+    # If A is knave: B is knight (NOT k_A -> k_B)
+    # Equivalent: k_A <-> NOT k_B
     formula.clauses.extend(SATEncoder.encode_iff(k_A, -k_B))
 
-    # B says: "A and C are both knights" (k_A ∧ k_C)
-    # If B is knight: statement is true (k_B → (k_A ∧ k_C))
-    #   === (¬k_B ∨ k_A) ∧ (¬k_B ∨ k_C)
-    # If B is knave: statement is false (¬k_B → ¬(k_A ∧ k_C))
-    #   === ¬k_B → (¬k_A ∨ ¬k_C)
-    #   === (k_B ∨ ¬k_A ∨ ¬k_C)
+    # B says: "A and C are both knights" (k_A AND k_C)
+    # If B is knight: statement is true (k_B -> (k_A AND k_C))
+    #   === (NOT k_B OR k_A) AND (NOT k_B OR k_C)
+    # If B is knave: statement is false (NOT k_B -> NOT (k_A AND k_C))
+    #   === NOT k_B -> (NOT k_A OR NOT k_C)
+    #   === (k_B OR NOT k_A OR NOT k_C)
 
-    # k_B → (k_A ∧ k_C)
+    # k_B -> (k_A AND k_C)
     formula.add_clause(Clause({-k_B, k_A}))
     formula.add_clause(Clause({-k_B, k_C}))
 
-    # ¬k_B → ¬(k_A ∧ k_C) === ¬k_B → (¬k_A ∨ ¬k_C) === (k_B ∨ ¬k_A ∨ ¬k_C)
+    # NOT k_B -> NOT (k_A AND k_C) === NOT k_B -> (NOT k_A OR NOT k_C) === (k_B OR NOT k_A OR NOT k_C)
     formula.add_clause(Clause({k_B, -k_A, -k_C}))
 
-    # C says: "A is a knave" (¬k_A)
-    # If C is knight: A is knave (k_C → ¬k_A)
-    # If C is knave: A is knight (¬k_C → k_A)
-    # Equivalent: k_C ↔ ¬k_A
+    # C says: "A is a knave" (NOT k_A)
+    # If C is knight: A is knave (k_C -> NOT k_A)
+    # If C is knave: A is knight (NOT k_C -> k_A)
+    # Equivalent: k_C <-> NOT k_A
     formula.clauses.extend(SATEncoder.encode_iff(k_C, -k_A))
 
     return formula
@@ -1346,8 +1374,8 @@ if __name__ == "__main__":
     formula1 = CNFFormula(
         [
             Clause({Literal("x"), Literal("y")}),
-            Clause({Literal("x", True), Literal("z")}),  # ¬x ∨ z
-            Clause({Literal("y", True), Literal("z", True)}),  # ¬y ∨ ¬z
+            Clause({Literal("x", True), Literal("z")}),  # NOT x OR z
+            Clause({Literal("y", True), Literal("z", True)}),  # NOT y OR NOT z
         ]
     )
     print(f"Formula: {formula1}")
@@ -1376,7 +1404,7 @@ if __name__ == "__main__":
     rules = [
         ([Literal("bird")], Literal("can_fly")),
         ([Literal("penguin")], Literal("bird")),
-        ([Literal("penguin")], Literal("can_fly", True)),  # ¬can_fly
+        ([Literal("penguin")], Literal("can_fly", True)),  # NOT can_fly
     ]
 
     is_consistent, model = checker.check_rule_consistency(rules)

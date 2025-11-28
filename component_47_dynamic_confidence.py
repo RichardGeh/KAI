@@ -20,6 +20,7 @@ Design-Prinzipien:
 
 import logging
 import math
+import threading
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
@@ -79,6 +80,18 @@ class DynamicConfidenceConfig:
             raise ValueError(
                 f"max_usage_boost muss in [0, 1] liegen: {self.max_usage_boost}"
             )
+        if self.recency_threshold_days < 0:
+            raise ValueError(
+                f"recency_threshold_days muss >= 0 sein: {self.recency_threshold_days}"
+            )
+        if self.recency_boost_factor < 1.0:
+            raise ValueError(
+                f"recency_boost_factor muss >= 1.0 sein: {self.recency_boost_factor}"
+            )
+        if self.recency_boost_factor > 2.0:
+            logger.warning(
+                f"recency_boost_factor sehr hoch: {self.recency_boost_factor}"
+            )
 
 
 @dataclass
@@ -134,6 +147,9 @@ class DynamicConfidenceManager:
 
         # Basis-Manager für Backwards Compatibility
         self.base_manager = ConfidenceManager()
+
+        # Thread safety for Neo4j access
+        self._neo4j_lock = threading.RLock()
 
         logger.info(
             "DynamicConfidenceManager initialisiert",
@@ -377,58 +393,80 @@ class DynamicConfidenceManager:
             return UsageStatistics()
 
         try:
-            with self.netzwerk.driver.session(database="neo4j") as session:
-                result = session.run(
-                    """
-                    MATCH (f:Fact {subject: $subject, relation: $relation, object: $object})
-                    OPTIONAL MATCH (e:Episode)-[learned:LEARNED_FACT]->(f)
-                    WITH f, count(DISTINCT e) AS usage_count,
-                         max(e.timestamp) AS last_used,
-                         min(e.timestamp) AS first_used,
-                         collect(DISTINCT e.id) AS episode_ids
-                    RETURN usage_count,
-                           last_used,
-                           first_used,
-                           episode_ids
-                    """,
-                    subject=subject.lower(),
-                    relation=relation.upper(),
-                    object=object_.lower(),
-                )
-
-                record = result.single()
-
-                if record:
-                    usage_count = record["usage_count"] or 0
-                    last_used_ts = record["last_used"]
-                    first_used_ts = record["first_used"]
-                    episode_ids = record["episode_ids"] or []
-
-                    # Convert Neo4j timestamps to datetime
-                    last_used = None
-                    first_used = None
-
-                    if last_used_ts is not None:
-                        # Neo4j timestamp() gibt Millisekunden seit Epoch zurück
-                        last_used = datetime.fromtimestamp(last_used_ts / 1000.0)
-
-                    if first_used_ts is not None:
-                        first_used = datetime.fromtimestamp(first_used_ts / 1000.0)
-
-                    return UsageStatistics(
-                        usage_count=usage_count,
-                        last_used=last_used,
-                        first_used=first_used,
-                        episode_ids=episode_ids,
+            with self._neo4j_lock:
+                with self.netzwerk.driver.session(database="neo4j") as session:
+                    result = session.run(
+                        """
+                        MATCH (f:Fact {subject: $subject, relation: $relation, object: $object})
+                        OPTIONAL MATCH (e:Episode)-[learned:LEARNED_FACT]->(f)
+                        WITH f, count(DISTINCT e) AS usage_count,
+                             max(e.timestamp) AS last_used,
+                             min(e.timestamp) AS first_used,
+                             collect(DISTINCT e.id) AS episode_ids
+                        RETURN usage_count,
+                               last_used,
+                               first_used,
+                               episode_ids
+                        """,
+                        subject=subject.lower(),
+                        relation=relation.upper(),
+                        object=object_.lower(),
                     )
 
-                return UsageStatistics()
+                    record = result.single()
 
-        except Exception as e:
+                    if record:
+                        usage_count = record["usage_count"] or 0
+                        last_used_ts = record["last_used"]
+                        first_used_ts = record["first_used"]
+                        episode_ids = record["episode_ids"] or []
+
+                        # Convert Neo4j timestamps to datetime
+                        last_used = None
+                        first_used = None
+
+                        if last_used_ts is not None:
+                            # Neo4j timestamp() gibt Millisekunden seit Epoch zurück
+                            last_used = datetime.fromtimestamp(last_used_ts / 1000.0)
+
+                        if first_used_ts is not None:
+                            first_used = datetime.fromtimestamp(first_used_ts / 1000.0)
+
+                        return UsageStatistics(
+                            usage_count=usage_count,
+                            last_used=last_used,
+                            first_used=first_used,
+                            episode_ids=episode_ids,
+                        )
+
+                    return UsageStatistics()
+
+        except (ValueError, TypeError) as e:
             logger.error(
-                f"Fehler beim Abrufen von Usage Statistics: {e}",
+                "Fehler beim Verarbeiten von Usage Statistics",
                 exc_info=True,
-                extra={"subject": subject, "relation": relation, "object": object_},
+                extra={
+                    "subject": subject,
+                    "relation": relation,
+                    "object": object_,
+                    "error_type": type(e).__name__,
+                    "operation": "get_usage_statistics",
+                },
+            )
+            return UsageStatistics()
+        except Exception as e:
+            # Catch Neo4j errors and other unexpected errors
+            logger.error(
+                "Neo4j Fehler beim Abrufen von Usage Statistics",
+                exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation": relation,
+                    "object": object_,
+                    "error_type": type(e).__name__,
+                    "driver_available": self.netzwerk.driver is not None,
+                    "operation": "get_usage_statistics",
+                },
             )
             return UsageStatistics()
 
@@ -550,6 +588,7 @@ class DynamicConfidenceManager:
 # ==================== GLOBAL INSTANCE ====================
 
 _global_dynamic_manager: Optional[DynamicConfidenceManager] = None
+_manager_lock = threading.Lock()
 
 
 def get_dynamic_confidence_manager(
@@ -559,6 +598,7 @@ def get_dynamic_confidence_manager(
     Gibt die globale DynamicConfidenceManager-Instanz zurück.
 
     Erstellt eine neue Instanz beim ersten Aufruf (Lazy Initialization).
+    Thread-safe mit double-check locking pattern.
 
     Args:
         netzwerk: KonzeptNetzwerk-Instanz (nur beim ersten Aufruf erforderlich)
@@ -572,14 +612,17 @@ def get_dynamic_confidence_manager(
     """
     global _global_dynamic_manager
 
+    # Double-check locking pattern for thread safety
     if _global_dynamic_manager is None:
-        if netzwerk is None:
-            raise ValueError(
-                "Beim ersten Aufruf muss netzwerk-Parameter übergeben werden"
-            )
+        with _manager_lock:
+            if _global_dynamic_manager is None:
+                if netzwerk is None:
+                    raise ValueError(
+                        "Beim ersten Aufruf muss netzwerk-Parameter übergeben werden"
+                    )
 
-        _global_dynamic_manager = DynamicConfidenceManager(netzwerk, config)
-        logger.info("Globale DynamicConfidenceManager-Instanz erstellt")
+                _global_dynamic_manager = DynamicConfidenceManager(netzwerk, config)
+                logger.info("Globale DynamicConfidenceManager-Instanz erstellt")
 
     return _global_dynamic_manager
 

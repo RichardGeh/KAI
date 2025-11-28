@@ -16,9 +16,10 @@ Kern-Features:
 import logging
 import math
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -58,11 +59,24 @@ class ProbabilisticFact:
     evidence: List[str] = field(default_factory=list)
 
     def __post_init__(self):
-        """Validierung der Wahrscheinlichkeit."""
+        """Validierung aller Felder."""
         if not 0.0 <= self.probability <= 1.0:
             raise ValueError(
                 f"Wahrscheinlichkeit muss in [0, 1] liegen: {self.probability}"
             )
+
+        if not self.pred or not isinstance(self.pred, str):
+            raise ValueError(f"Prädikat muss nicht-leerer String sein: {self.pred!r}")
+
+        if not isinstance(self.args, dict):
+            raise ValueError(f"Args muss Dictionary sein: {type(self.args)}")
+
+        # Validiere, dass args nur String-Keys und String-Values hat
+        for key, value in self.args.items():
+            if not isinstance(key, str) or not isinstance(value, str):
+                raise ValueError(
+                    f"Args muss str->str Mapping sein, gefunden: {key!r}={value!r}"
+                )
 
 
 @dataclass
@@ -97,13 +111,31 @@ class BeliefState:
     @property
     def probability(self) -> float:
         """Erwartungswert der Beta-Verteilung: E[p] = α/(α+β)"""
-        return self.alpha / (self.alpha + self.beta)
+        denominator = self.alpha + self.beta
+        # Epsilon guard (sollte nie 0 sein bei korrekt initialisierten Werten, aber Sicherheit)
+        if denominator == 0:
+            logger.warning(
+                f"Probability-Berechnung: Invalid BeliefState (alpha={self.alpha}, beta={self.beta}). "
+                f"Verwende uninformativen Prior 0.5."
+            )
+            return 0.5
+        return self.alpha / denominator
 
     @property
     def variance(self) -> float:
         """Varianz der Beta-Verteilung (Maß für Unsicherheit)"""
         a, b = self.alpha, self.beta
-        return (a * b) / ((a + b) ** 2 * (a + b + 1))
+        denominator = (a + b) ** 2 * (a + b + 1)
+
+        # Schutz vor Division durch Zero
+        if denominator == 0:
+            logger.warning(
+                f"Varianz-Berechnung: Invalid BeliefState (alpha={a}, beta={b}). "
+                f"Verwende maximale Unsicherheit."
+            )
+            return 1.0  # Maximale Unsicherheit
+
+        return (a * b) / denominator
 
     @property
     def confidence(self) -> float:
@@ -111,7 +143,11 @@ class BeliefState:
         Confidence als Inverse der Standardabweichung.
         Höhere Werte = sicherer.
         """
-        return 1.0 / (1.0 + math.sqrt(self.variance))
+        # Epsilon guard für numerische Stabilität
+        variance = max(
+            0.0, self.variance
+        )  # Verhindere negative Varianz durch Rundungsfehler
+        return 1.0 / (1.0 + math.sqrt(variance))
 
     def update(self, observation: bool, weight: float = 1.0):
         """
@@ -141,13 +177,25 @@ class ProbabilisticEngine:
     - Uncertainty-Aware Response Generation
     """
 
-    def __init__(self):
-        """Initialisiert die Probabilistic Engine."""
-        self.beliefs: Dict[str, BeliefState] = {}
-        self.conditional_probs: List[ConditionalProbability] = []
-        self.facts: List[ProbabilisticFact] = []
+    def __init__(self, max_facts: int = 10000, max_rules: int = 1000):
+        """
+        Initialisiert die Probabilistic Engine.
 
-        logger.info("ProbabilisticEngine initialisiert.")
+        Args:
+            max_facts: Maximale Anzahl gespeicherter Fakten (bounded queue)
+            max_rules: Maximale Anzahl gespeicherter Regeln (bounded queue)
+        """
+        self.beliefs: Dict[str, BeliefState] = {}
+        self.conditional_probs: Deque[ConditionalProbability] = deque(maxlen=max_rules)
+        self.facts: Deque[ProbabilisticFact] = deque(maxlen=max_facts)
+        self.max_facts = max_facts
+        self.max_rules = max_rules
+        # Index rule by antecedents for efficient lookup
+        self._rule_index: Dict[str, List[ConditionalProbability]] = {}
+
+        logger.info(
+            f"ProbabilisticEngine initialisiert (max_facts={max_facts}, max_rules={max_rules})."
+        )
 
     # ==================== CORE INFERENCE ====================
 
@@ -199,6 +247,13 @@ class ProbabilisticEngine:
             cond_prob: Die bedingte Wahrscheinlichkeit
         """
         self.conditional_probs.append(cond_prob)
+
+        # Index rule by antecedents for efficient lookup
+        for antecedent in cond_prob.antecedents:
+            if antecedent not in self._rule_index:
+                self._rule_index[antecedent] = []
+            self._rule_index[antecedent].append(cond_prob)
+
         logger.debug(
             f"Regel hinzugefügt: P({cond_prob.consequent} | "
             f"{', '.join(cond_prob.antecedents)}) = {cond_prob.probability:.3f}"
@@ -263,7 +318,15 @@ class ProbabilisticEngine:
         """
         new_facts = []
 
-        for rule in self.conditional_probs:
+        # Nur Regeln prüfen, deren Antecedents wir haben (indexed lookup)
+        candidate_rules_dict = {}
+        for antecedent in self.beliefs.keys():
+            for rule in self._rule_index.get(antecedent, []):
+                # Use rule_id as key to avoid duplicates
+                if rule.rule_id not in candidate_rules_dict:
+                    candidate_rules_dict[rule.rule_id] = rule
+
+        for rule in candidate_rules_dict.values():
             # KORREKTUR: Prüfe ob alle Antecedents erfüllt sind
             antecedent_probs = []
             all_antecedents_found = True
@@ -566,6 +629,7 @@ class ProbabilisticEngine:
         self.beliefs.clear()
         self.conditional_probs.clear()
         self.facts.clear()
+        self._rule_index.clear()
         logger.info("ProbabilisticEngine zurückgesetzt.")
 
     # ==================== UNIFIED PROOF EXPLANATION INTEGRATION ====================

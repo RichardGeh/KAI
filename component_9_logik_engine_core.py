@@ -71,6 +71,27 @@ except ImportError:
 logger = get_logger(__name__)
 Binding = Dict[str, Any]
 
+# SECURITY: Allowed predicates for Cypher injection prevention
+ALLOWED_PREDICATES = {"IS_A", "PART_OF", "LOCATED_IN", "CAPABLE_OF", "HAS_PROPERTY"}
+
+
+def _validate_predicate(pred: str) -> str:
+    """
+    Validates and sanitizes predicate names to prevent Cypher injection.
+
+    Args:
+        pred: Predicate name to validate
+
+    Returns:
+        Validated predicate name
+
+    Raises:
+        ValueError: If predicate is not in allowed list
+    """
+    if pred not in ALLOWED_PREDICATES:
+        raise ValueError(f"Invalid predicate: {pred}. Allowed: {ALLOWED_PREDICATES}")
+    return pred
+
 
 @dataclass
 class Fact:
@@ -187,22 +208,38 @@ def match_rule(
     return _match_multi_pattern_rule(rule, facts)
 
 
+# Iteration limits for multi-pattern rule matching (prevent exponential blowup)
+MAX_MATCHES_PER_PATTERN = 100
+MAX_TOTAL_ITERATIONS = 10000
+
+
 def _match_multi_pattern_rule(
     rule: Rule, facts: List[Fact]
 ) -> List[Tuple[Binding, List[Fact], float]]:
     """
     Matched eine Regel mit mehreren WHEN-Bedingungen.
     Alle Patterns müssen erfüllt sein (AND-Verknüpfung).
+
+    Includes safeguards against exponential blowup with iteration limits.
     """
     # Starte mit dem ersten Pattern
     first_pattern = rule.when[0]
     current_matches = []
+    total_iterations = 0
 
     for fact in facts:
         if fact.pred == first_pattern.get("pred"):
             bindings = unify(first_pattern.get("args", {}), fact.args, {})
             if bindings is not None:
                 current_matches.append((bindings, [fact], fact.confidence))
+
+    # Limit initial matches
+    if len(current_matches) > MAX_MATCHES_PER_PATTERN:
+        logger.warning(
+            f"Rule {rule.id}: Initial pattern matched {len(current_matches)} times, "
+            f"truncating to {MAX_MATCHES_PER_PATTERN}"
+        )
+        current_matches = current_matches[:MAX_MATCHES_PER_PATTERN]
 
     # Erweitere schrittweise um weitere Patterns
     for pattern in rule.when[1:]:
@@ -213,6 +250,16 @@ def _match_multi_pattern_rule(
         for bindings, support_facts, confidence in current_matches:
             # Suche Fakten, die mit den bisherigen Bindings kompatibel sind
             for fact in facts:
+                total_iterations += 1
+
+                # Check iteration limit
+                if total_iterations > MAX_TOTAL_ITERATIONS:
+                    logger.warning(
+                        f"Rule {rule.id} exceeded iteration limit {MAX_TOTAL_ITERATIONS}, "
+                        f"truncating matches at {len(next_matches)}"
+                    )
+                    return next_matches[:MAX_MATCHES_PER_PATTERN]
+
                 if fact.pred == pattern_pred and fact not in support_facts:
                     new_bindings = unify(pattern_args, fact.args, bindings)
                     if new_bindings is not None:
@@ -221,6 +268,14 @@ def _match_multi_pattern_rule(
                         next_matches.append(
                             (new_bindings, support_facts + [fact], combined_confidence)
                         )
+
+        # Limit matches per pattern
+        if len(next_matches) > MAX_MATCHES_PER_PATTERN:
+            logger.warning(
+                f"Rule {rule.id}: Pattern matched {len(next_matches)} times, "
+                f"truncating to {MAX_MATCHES_PER_PATTERN}"
+            )
+            next_matches = next_matches[:MAX_MATCHES_PER_PATTERN]
 
         current_matches = next_matches
         if not current_matches:
@@ -580,6 +635,13 @@ class Engine:
         if goal.pred not in ["IS_A", "PART_OF", "LOCATED_IN", "CAPABLE_OF"]:
             return None
 
+        # SECURITY: Validate predicate to prevent Cypher injection
+        try:
+            validated_pred = _validate_predicate(goal.pred)
+        except ValueError as e:
+            logger.warning(f"Invalid predicate rejected: {e}")
+            return None
+
         # Extrahiere Subject und Object aus Goal
         subject = goal.args.get("subject")
         object_entity = goal.args.get("object")
@@ -599,7 +661,7 @@ class Engine:
                     ORDER BY hops ASC
                     LIMIT 1
                 """
-                    % goal.pred
+                    % validated_pred
                 )
                 result = session.run(
                     query, subject=subject.lower(), object=object_entity.lower()
@@ -636,7 +698,7 @@ class Engine:
                     ORDER BY hops ASC
                     LIMIT 5
                 """
-                    % goal.pred
+                    % validated_pred
                 )
                 result = session.run(query, subject=subject.lower())
 
@@ -671,7 +733,7 @@ class Engine:
                     ORDER BY hops ASC
                     LIMIT 5
                 """
-                    % goal.pred
+                    % validated_pred
                 )
                 result = session.run(query, object=object_entity.lower())
 

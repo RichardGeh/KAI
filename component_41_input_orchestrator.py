@@ -24,6 +24,18 @@ from component_15_logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# Constants for segment classification
+MAX_ABBREVIATION_LENGTH = 5  # Maximum characters for abbreviation detection
+MIN_SEGMENTS_FOR_ORCHESTRATION = 2  # Minimum segments needed for orchestration
+MIN_LOGIC_PATTERNS_FOR_PUZZLE = 2  # Minimum logic patterns to classify as puzzle
+
+# Confidence thresholds for segment classification
+CONFIDENCE_QUESTION_MARK = 0.95  # High confidence when question mark present
+CONFIDENCE_QUESTION_WORD = 0.90  # Confidence for question word detection
+CONFIDENCE_COMMAND = 1.0  # Maximum confidence for explicit commands
+CONFIDENCE_DECLARATIVE = 0.85  # Confidence for declarative patterns
+CONFIDENCE_FALLBACK = 0.70  # Lower confidence for fallback classification
+
 
 class SegmentType(Enum):
     """Typ eines Eingabe-Segments."""
@@ -139,7 +151,7 @@ class InputOrchestrator:
         segments = self._segment_text(text)
 
         # Orchestrierung nur bei mehreren Segmenten
-        if len(segments) < 2:
+        if len(segments) < MIN_SEGMENTS_FOR_ORCHESTRATION:
             logger.debug(f"Nur {len(segments)} Segment(e) - überspringe Orchestrierung")
             return False
 
@@ -196,9 +208,13 @@ class InputOrchestrator:
         has_question = any(s.is_question() for s in segments)
 
         # Logik-Rätsel wenn:
-        # - Mindestens 2 logische Patterns erkannt
+        # - Mindestens MIN_LOGIC_PATTERNS_FOR_PUZZLE logische Patterns erkannt
         # - Mehrere Erklärungen + Frage
-        is_puzzle = pattern_matches >= 2 and has_multiple_explanations and has_question
+        is_puzzle = (
+            pattern_matches >= MIN_LOGIC_PATTERNS_FOR_PUZZLE
+            and has_multiple_explanations
+            and has_question
+        )
 
         if is_puzzle:
             logger.info(
@@ -286,7 +302,7 @@ class InputOrchestrator:
 
             # Check if this is a short segment ending with "." (likely abbreviation)
             is_abbrev = (
-                len(segment) <= 5
+                len(segment) <= MAX_ABBREVIATION_LENGTH
                 and segment.endswith(".")
                 and segment.lower() in abbreviations
             )
@@ -295,10 +311,10 @@ class InputOrchestrator:
             if is_abbrev and i + 1 < len(segments):
                 merged_segment = segment + " " + segments[i + 1]
                 merged.append(merged_segment)
-                i += 2  # Skip next segment as it was merged
                 logger.debug(
-                    f"Merged abbreviation: '{segment}' + '{segments[i-1]}' -> '{merged_segment}'"
+                    f"Merged abbreviation: '{segment}' + '{segments[i + 1]}' -> '{merged_segment}'"
                 )
+                i += 2  # Skip next segment as it was merged
             else:
                 merged.append(segment)
                 i += 1
@@ -334,10 +350,10 @@ class InputOrchestrator:
             if is_lone_question_word and i + 1 < len(segments):
                 merged_segment = segment.rstrip() + " " + segments[i + 1]
                 merged.append(merged_segment)
-                i += 2  # Skip next segment as it was merged
                 logger.debug(
-                    f"Merged question word: '{segment}' + '{segments[i-1]}' -> '{merged_segment[:50]}...'"
+                    f"Merged question word: '{segment}' + '{segments[i + 1]}' -> '{merged_segment[:50]}...'"
                 )
+                i += 2  # Skip next segment as it was merged
             else:
                 merged.append(segment)
                 i += 1
@@ -451,7 +467,7 @@ class InputOrchestrator:
             return InputSegment(
                 text=text,
                 segment_type=SegmentType.QUESTION,
-                confidence=0.95,  # Hohe Konfidenz bei Fragezeichen
+                confidence=CONFIDENCE_QUESTION_MARK,
                 metadata={"heuristic": "question_mark"},
             )
 
@@ -464,7 +480,7 @@ class InputOrchestrator:
             return InputSegment(
                 text=text,
                 segment_type=SegmentType.QUESTION,
-                confidence=0.90,
+                confidence=CONFIDENCE_QUESTION_WORD,
                 metadata={"heuristic": "question_word", "question_word": first_word},
             )
 
@@ -477,7 +493,7 @@ class InputOrchestrator:
                 return InputSegment(
                     text=text,
                     segment_type=SegmentType.COMMAND,
-                    confidence=1.0,  # Maximale Konfidenz bei expliziten Befehlen
+                    confidence=CONFIDENCE_COMMAND,
                     metadata={"heuristic": "command_prefix", "command": prefix},
                 )
 
@@ -502,7 +518,7 @@ class InputOrchestrator:
             return InputSegment(
                 text=text,
                 segment_type=SegmentType.EXPLANATION,
-                confidence=0.85,
+                confidence=CONFIDENCE_DECLARATIVE,
                 metadata={"heuristic": "declarative_pattern"},
             )
 
@@ -514,7 +530,7 @@ class InputOrchestrator:
         return InputSegment(
             text=text,
             segment_type=SegmentType.EXPLANATION,
-            confidence=0.70,  # Niedrigere Konfidenz bei Fallback
+            confidence=CONFIDENCE_FALLBACK,
             metadata={"heuristic": "fallback"},
         )
 

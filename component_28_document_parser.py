@@ -89,9 +89,19 @@ class DocumentParser(ABC):
 
         Raises:
             FileNotFoundError: Wenn Datei nicht existiert
-            DocumentParseError: Wenn Datei nicht lesbar ist
+            DocumentParseError: Wenn Datei nicht lesbar ist oder Path Traversal erkannt wurde
         """
-        path = Path(filepath)
+        # Resolve to absolute path to prevent path traversal attacks
+        path = Path(filepath).resolve()
+
+        # Check for symbolic links (security consideration)
+        if path.is_symlink():
+            logger.warning(
+                f"Symbolic link detected: {filepath}",
+                extra={"resolved_path": str(path)},
+            )
+            # Note: We allow symlinks but log them. To block symlinks, uncomment:
+            # raise DocumentParseError("Symbolic links not allowed", file_path=filepath)
 
         if not path.exists():
             logger.error(f"Datei nicht gefunden: {filepath}")
@@ -101,7 +111,7 @@ class DocumentParser(ABC):
             logger.error(f"Pfad ist keine Datei: {filepath}")
             raise DocumentParseError("Pfad ist keine Datei", file_path=filepath)
 
-        if not os.access(filepath, os.R_OK):
+        if not os.access(str(path), os.R_OK):
             logger.error(f"Datei nicht lesbar: {filepath}")
             raise DocumentParseError(
                 "Datei nicht lesbar (fehlende Leserechte)", file_path=filepath
@@ -752,7 +762,7 @@ if __name__ == "__main__":
     for filename in test_files:
         is_supported = DocumentParserFactory.is_supported(filename)
         print(
-            f"   {filename}: {'✓ unterstützt' if is_supported else '✗ nicht unterstützt'}"
+            f"   {filename}: {'[OK] unterstützt' if is_supported else '[FEHLER] nicht unterstützt'}"
         )
 
     print("\n=== Test abgeschlossen ===")

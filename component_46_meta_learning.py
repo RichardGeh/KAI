@@ -14,12 +14,15 @@ Last Updated: 2025-11-08
 """
 
 import random
-from collections import defaultdict
+import re
+import threading
+from collections import defaultdict, deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from cachetools import TTLCache
+from neo4j.exceptions import Neo4jError
 
 from component_1_netzwerk import KonzeptNetzwerk
 from component_11_embedding_service import EmbeddingService
@@ -27,6 +30,13 @@ from component_15_logging_config import get_logger
 from kai_exceptions import KAIException
 
 logger = get_logger(__name__)
+
+# ============================================================================
+# Input Validation
+# ============================================================================
+
+# Whitelist pattern for strategy names (security: prevent Cypher injection)
+STRATEGY_NAME_PATTERN = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 
 
 # ============================================================================
@@ -52,14 +62,19 @@ class StrategyPerformance:
     created_at: datetime = field(default_factory=datetime.now)
 
     def update_from_usage(
-        self, confidence: float, response_time: float, success: Optional[bool] = None
+        self,
+        confidence: float,
+        response_time: float,
+        success: Optional[bool] = None,
+        learning_rate: float = 0.1,
     ) -> None:
         """Update statistiken basierend auf neuem usage"""
         self.queries_handled += 1
 
         # Update Confidence (exponential moving average)
-        alpha = 0.1  # Learning rate
-        self.avg_confidence = (1 - alpha) * self.avg_confidence + alpha * confidence
+        self.avg_confidence = (
+            1 - learning_rate
+        ) * self.avg_confidence + learning_rate * confidence
 
         # Update Response Time
         self.total_response_time += response_time
@@ -124,7 +139,10 @@ class MetaLearningConfig:
     epsilon_decay: float = 0.995  # Decay über Zeit
     min_epsilon: float = 0.05
 
-    # Learning rates
+    # Learning rates (extracted from magic numbers)
+    confidence_learning_rate: float = (
+        0.1  # For exponential moving average in update_from_usage
+    )
     confidence_alpha: float = 0.1
     success_rate_alpha: float = 0.1
 
@@ -135,10 +153,22 @@ class MetaLearningConfig:
     # Performance thresholds
     min_queries_for_confidence: int = 5  # Mindest-Queries bevor Strategy bevorzugt wird
 
-    # Scoring weights
+    # Scoring weights (extracted from magic numbers in _match_query_patterns)
+    pattern_similarity_weight: float = 0.6  # Weight for similarity score
+    pattern_success_weight: float = 0.4  # Weight for success rate
+    performance_success_weight: float = 0.6  # Weight for success rate in perf score
+    performance_confidence_weight: float = 0.4  # Weight for confidence in perf score
+    performance_speed_bonus_max: float = 0.1  # Max bonus for fast response times
+    performance_speed_threshold: float = 5.0  # Response time threshold (seconds)
+
+    # Overall scoring weights
     pattern_weight: float = 0.4
     performance_weight: float = 0.4
     context_weight: float = 0.2
+
+    # Text processing
+    query_truncate_length: int = 100  # Max length for query text in patterns
+    max_failure_modes: int = 20  # Max number of failure modes to track per strategy
 
     # Neo4j persistence
     persist_every_n_queries: int = 10
@@ -146,6 +176,10 @@ class MetaLearningConfig:
     # Cache
     cache_ttl_seconds: int = 600  # 10 Minuten (für Strategy Stats)
     query_pattern_cache_ttl: int = 300  # 5 Minuten (für Query Patterns)
+
+    # Memory management
+    max_usage_history_size: int = 10000  # Limit für usage_history (prevent memory leak)
+    max_query_patterns_size: int = 1000  # Limit für query_patterns gesamt
 
 
 # ============================================================================
@@ -175,16 +209,21 @@ class MetaLearningEngine:
         self.embedding_service = embedding_service
         self.config = config or MetaLearningConfig()
 
-        # In-Memory state
+        # Thread Safety: Locks for shared state
+        self._lock = threading.RLock()  # Reentrant lock for nested calls
+        self._cache_lock = threading.Lock()  # Separate lock for cache operations
+
+        # In-Memory state (protected by _lock)
         self.strategy_stats: Dict[str, StrategyPerformance] = {}
         self.query_patterns: Dict[str, List[QueryPattern]] = defaultdict(list)
-        self.usage_history: List[StrategyUsageEpisode] = []
+        # Memory Leak Fix: Use deque with maxlen instead of unbounded list
+        self.usage_history: deque = deque(maxlen=self.config.max_usage_history_size)
 
-        # Counters
+        # Counters (protected by _lock)
         self.total_queries: int = 0
         self.queries_since_last_persist: int = 0
 
-        # Performance Optimization: Caching
+        # Performance Optimization: Caching (protected by _cache_lock)
         # Strategy Stats Cache (TTL: 10 Minuten) für schnellen Zugriff
         self._stats_cache: TTLCache = TTLCache(
             maxsize=50, ttl=self.config.cache_ttl_seconds
@@ -193,6 +232,9 @@ class MetaLearningEngine:
         self._pattern_cache: TTLCache = TTLCache(
             maxsize=100, ttl=self.config.query_pattern_cache_ttl
         )
+
+        # Neo4j Indexes
+        self._ensure_neo4j_indexes()
 
         # Load from Neo4j
         self._load_persisted_stats()
@@ -203,8 +245,81 @@ class MetaLearningEngine:
         )
 
     # ========================================================================
-    # Helper: Generic Neo4j Query
+    # Helper Methods
     # ========================================================================
+
+    def _validate_strategy_name(self, name: str) -> None:
+        """
+        Validate strategy name against whitelist pattern (security: prevent Cypher injection).
+
+        Args:
+            name: Strategy name to validate
+
+        Raises:
+            ValueError: If strategy name contains invalid characters
+        """
+        if not STRATEGY_NAME_PATTERN.match(name):
+            raise ValueError(
+                f"Invalid strategy name '{name}': must match pattern "
+                f"[a-z_][a-z0-9_]{{0,63}} (lowercase, underscore, max 64 chars)"
+            )
+
+    def _sanitize_for_logging(self, text: str, max_len: int = 100) -> str:
+        """
+        Sanitize text for Windows cp1252 logging (remove forbidden Unicode chars).
+
+        Per CLAUDE.md policy: Windows console supports only cp1252, Unicode chars
+        like -> x / != <= >= cause UnicodeEncodeError.
+
+        Args:
+            text: Text to sanitize
+            max_len: Maximum length (truncate longer text)
+
+        Returns:
+            Sanitized ASCII-safe text
+        """
+        # Replace forbidden Unicode characters with ASCII equivalents
+        replacements = {
+            "\u2192": "->",  # →
+            "\u00d7": "x",  # ×
+            "\u00f7": "/",  # ÷
+            "\u2260": "!=",  # ≠
+            "\u2264": "<=",  # ≤
+            "\u2265": ">=",  # ≥
+            "\u2713": "[OK]",  # ✓
+            "\u2717": "[FAIL]",  # ✗
+            "\u2227": "AND",  # ∧
+            "\u2228": "OR",  # ∨
+            "\u00ac": "NOT",  # ¬
+        }
+
+        sanitized = text
+        for unicode_char, ascii_replacement in replacements.items():
+            sanitized = sanitized.replace(unicode_char, ascii_replacement)
+
+        # Truncate and ensure ASCII-safe (replace unknown chars with ?)
+        return sanitized[:max_len].encode("ascii", errors="replace").decode("ascii")
+
+    def _ensure_neo4j_indexes(self) -> None:
+        """
+        Create Neo4j indexes for performance.
+
+        Creates index on StrategyPerformance.strategy_name for fast MERGE/MATCH operations.
+        """
+        try:
+            with self.netzwerk.driver.session() as session:
+                session.run(
+                    """
+                    CREATE INDEX strategy_perf_name IF NOT EXISTS
+                    FOR (sp:StrategyPerformance)
+                    ON (sp.strategy_name)
+                """
+                )
+                logger.debug("Neo4j indexes verified for MetaLearning")
+        except Neo4jError as e:
+            logger.warning("Failed to create Neo4j indexes: %s", e)
+        except Exception as e:
+            logger.error("Unexpected error creating Neo4j indexes: %s", e)
 
     def _execute_query(
         self, cypher: str, params: Optional[Dict[str, Any]] = None
@@ -214,9 +329,12 @@ class MetaLearningEngine:
             with self.netzwerk.driver.session() as session:
                 result = session.run(cypher, params or {})
                 return [dict(record) for record in result]
+        except Neo4jError as e:
+            logger.error("Neo4j query failed: %s", e, exc_info=True)
+            raise PersistenceException(f"Neo4j query failed: {e}") from e
         except Exception as e:
-            logger.error("Neo4j query failed: %s", e)
-            return []
+            logger.error("Unexpected error in Neo4j query: %s", e, exc_info=True)
+            raise
 
     # ========================================================================
     # Core Functions: Strategy Usage Recording
@@ -241,75 +359,111 @@ class MetaLearningEngine:
             response_time: Zeit in Sekunden
             context: Optional context dict
             user_feedback: 'correct', 'incorrect', 'neutral'
+
+        Raises:
+            ValueError: If strategy name is invalid
+            KeyError: If result dict is missing required keys
         """
-        try:
-            # Initialisiere Strategy stats falls neu
-            if strategy not in self.strategy_stats:
-                self.strategy_stats[strategy] = StrategyPerformance(
-                    strategy_name=strategy
+        # Validate strategy name (security: prevent Cypher injection)
+        self._validate_strategy_name(strategy)
+
+        with self._lock:
+            try:
+                # Initialisiere Strategy stats falls neu (atomic check-then-act)
+                if strategy not in self.strategy_stats:
+                    self.strategy_stats[strategy] = StrategyPerformance(
+                        strategy_name=strategy
+                    )
+
+                stats = self.strategy_stats[strategy]
+
+                # Extrahiere Confidence
+                if "confidence" not in result:
+                    raise KeyError("Result dict must contain 'confidence' key")
+                confidence = result["confidence"]
+
+                # Determine Success basierend auf Feedback
+                success = None
+                if user_feedback == "correct":
+                    success = True
+                elif user_feedback == "incorrect":
+                    success = False
+                    # Extract failure mode
+                    failure_mode = self._extract_failure_pattern(query, result)
+                    if failure_mode and failure_mode not in stats.failure_modes:
+                        stats.failure_modes.append(failure_mode)
+                        if len(stats.failure_modes) > self.config.max_failure_modes:
+                            stats.failure_modes.pop(0)
+
+                # Update Stats (pass config learning rate)
+                stats.update_from_usage(
+                    confidence,
+                    response_time,
+                    success,
+                    learning_rate=self.config.confidence_learning_rate,
                 )
 
-            stats = self.strategy_stats[strategy]
+                # Query Embedding für Pattern-Learning
+                query_embedding = self.embedding_service.get_embedding(query)
 
-            # Extrahiere Confidence
-            confidence = result.get("confidence", 0.5)
+                # Record Episode (deque automatically evicts oldest if maxlen exceeded)
+                episode = StrategyUsageEpisode(
+                    timestamp=datetime.now(),
+                    strategy_name=strategy,
+                    query=query,
+                    query_embedding=query_embedding,
+                    context=context or {},
+                    result_confidence=confidence,
+                    response_time=response_time,
+                    user_feedback=user_feedback,
+                    failure_reason=result.get("error") if not success else None,
+                )
+                self.usage_history.append(episode)
 
-            # Determine Success basierend auf Feedback
-            success = None
-            if user_feedback == "correct":
-                success = True
-            elif user_feedback == "incorrect":
-                success = False
-                # Extract failure mode
-                failure_mode = self._extract_failure_pattern(query, result)
-                if failure_mode and failure_mode not in stats.failure_modes:
-                    stats.failure_modes.append(failure_mode)
-                    if len(stats.failure_modes) > 20:  # Limit
-                        stats.failure_modes.pop(0)
+                # Update Query Patterns
+                self._update_query_patterns(strategy, query, query_embedding, success)
 
-            # Update Stats
-            stats.update_from_usage(confidence, response_time, success)
+                # Increment counters (atomic)
+                self.total_queries += 1
+                self.queries_since_last_persist += 1
 
-            # Query Embedding für Pattern-Learning
-            query_embedding = self.embedding_service.get_embedding(query)
+                # Decay epsilon on successful feedback (moved from select_best_strategy)
+                if user_feedback == "correct":
+                    self.config.epsilon = max(
+                        self.config.min_epsilon,
+                        self.config.epsilon * self.config.epsilon_decay,
+                    )
 
-            # Record Episode
-            episode = StrategyUsageEpisode(
-                timestamp=datetime.now(),
-                strategy_name=strategy,
-                query=query,
-                query_embedding=query_embedding,
-                context=context or {},
-                result_confidence=confidence,
-                response_time=response_time,
-                user_feedback=user_feedback,
-                failure_reason=result.get("error") if not success else None,
-            )
-            self.usage_history.append(episode)
+                # Persist to Neo4j periodisch
+                if (
+                    self.queries_since_last_persist
+                    >= self.config.persist_every_n_queries
+                ):
+                    self._persist_all_stats()
+                    self.queries_since_last_persist = 0
 
-            # Update Query Patterns
-            self._update_query_patterns(strategy, query, query_embedding, success)
+                # Sanitize for logging (Windows cp1252 safe)
+                safe_query = self._sanitize_for_logging(query)
+                logger.debug(
+                    "Recorded usage for strategy '%s': query='%s', confidence=%.2f, "
+                    "response_time=%.3fs, feedback=%s",
+                    strategy,
+                    safe_query,
+                    confidence,
+                    response_time,
+                    user_feedback,
+                )
 
-            # Increment counters
-            self.total_queries += 1
-            self.queries_since_last_persist += 1
-
-            # Persist to Neo4j periodisch
-            if self.queries_since_last_persist >= self.config.persist_every_n_queries:
-                self._persist_all_stats()
-                self.queries_since_last_persist = 0
-
-            logger.debug(
-                "Recorded usage for strategy '%s': confidence=%.2f, "
-                "response_time=%.3fs, feedback=%s",
-                strategy,
-                confidence,
-                response_time,
-                user_feedback,
-            )
-
-        except Exception as e:
-            logger.error("Error recording strategy usage: %s", e, exc_info=True)
+            except (ValueError, KeyError) as e:
+                logger.error(
+                    "Invalid input in record_strategy_usage: %s", e, exc_info=True
+                )
+                raise
+            except Exception as e:
+                logger.critical(
+                    "Unexpected error recording strategy usage: %s", e, exc_info=True
+                )
+                raise MetaLearningException(f"Failed to record usage: {e}") from e
 
     def record_strategy_usage_with_feedback(
         self,
@@ -375,6 +529,8 @@ class MetaLearningEngine:
         """
         Meta-Reasoning: Welche Strategy ist am besten für diese Query?
 
+        Side-effect free: Does NOT mutate epsilon (decay moved to record_strategy_usage).
+
         Args:
             query: User-Query
             context: Optional context dict
@@ -383,90 +539,99 @@ class MetaLearningEngine:
         Returns:
             (strategy_name, confidence_score)
         """
-        try:
-            context = context or {}
+        with self._lock:
+            try:
+                context = context or {}
 
-            # Epsilon-Greedy: Exploration vs. Exploitation
-            if random.random() < self.config.epsilon:
-                # EXPLORATION: Random strategy
-                strategies = available_strategies or list(self.strategy_stats.keys())
-                if not strategies:
-                    return ("direct_answer", 0.5)  # Fallback
+                # Epsilon-Greedy: Exploration vs. Exploitation
+                if random.random() < self.config.epsilon:
+                    # EXPLORATION: Random strategy
+                    strategies = available_strategies or list(
+                        self.strategy_stats.keys()
+                    )
+                    if not strategies:
+                        return ("direct_answer", 0.5)  # Fallback
 
-                selected = random.choice(strategies)
-                logger.debug("Epsilon-greedy EXPLORATION: selected '%s'", selected)
-                return (selected, 0.3)  # Low confidence für exploration
+                    selected = random.choice(strategies)
+                    logger.debug("Epsilon-greedy EXPLORATION: selected '%s'", selected)
+                    return (selected, 0.3)  # Low confidence für exploration
 
-            # EXPLOITATION: Best strategy basierend auf Scoring
-            query_embedding = self.embedding_service.get_embedding(query)
+                # EXPLOITATION: Best strategy basierend auf Scoring
+                query_embedding = self.embedding_service.get_embedding(query)
 
-            strategy_scores: Dict[str, float] = {}
-            strategies_to_evaluate = available_strategies or list(
-                self.strategy_stats.keys()
-            )
-
-            if not strategies_to_evaluate:
-                return ("direct_answer", 0.5)
-
-            for strategy_name in strategies_to_evaluate:
-                if strategy_name not in self.strategy_stats:
-                    # Neue Strategy: neutral score
-                    strategy_scores[strategy_name] = 0.5
-                    continue
-
-                stats = self.strategy_stats[strategy_name]
-
-                # 1. Pattern-basierte Scoring
-                pattern_score = self._match_query_patterns(
-                    query_embedding, strategy_name
+                strategy_scores: Dict[str, float] = {}
+                strategies_to_evaluate = available_strategies or list(
+                    self.strategy_stats.keys()
                 )
 
-                # 2. Performance-basierte Scoring
-                perf_score = self._calculate_performance_score(stats)
+                if not strategies_to_evaluate:
+                    return ("direct_answer", 0.5)
 
-                # 3. Context-basierte Scoring
-                context_score = self._match_context_requirements(context, strategy_name)
+                for strategy_name in strategies_to_evaluate:
+                    if strategy_name not in self.strategy_stats:
+                        # Neue Strategy: neutral score
+                        strategy_scores[strategy_name] = 0.5
+                        continue
 
-                # Aggregierte Score (weighted sum)
-                aggregated_score = (
-                    pattern_score * self.config.pattern_weight
-                    + perf_score * self.config.performance_weight
-                    + context_score * self.config.context_weight
+                    stats = self.strategy_stats[strategy_name]
+
+                    # 1. Pattern-basierte Scoring
+                    pattern_score = self._match_query_patterns(
+                        query_embedding, strategy_name
+                    )
+
+                    # 2. Performance-basierte Scoring
+                    perf_score = self._calculate_performance_score(stats)
+
+                    # 3. Context-basierte Scoring
+                    context_score = self._match_context_requirements(
+                        context, strategy_name
+                    )
+
+                    # Aggregierte Score (weighted sum)
+                    aggregated_score = (
+                        pattern_score * self.config.pattern_weight
+                        + perf_score * self.config.performance_weight
+                        + context_score * self.config.context_weight
+                    )
+
+                    strategy_scores[strategy_name] = aggregated_score
+
+                    logger.debug(
+                        "Strategy '%s' scores: pattern=%.2f, perf=%.2f, "
+                        "context=%.2f -> total=%.2f",
+                        strategy_name,
+                        pattern_score,
+                        perf_score,
+                        context_score,
+                        aggregated_score,
+                    )
+
+                # Select best strategy
+                best_strategy = max(strategy_scores, key=strategy_scores.get)
+                best_score = strategy_scores[best_strategy]
+
+                logger.info(
+                    "Selected strategy '%s' with score %.2f (epsilon=%.3f)",
+                    best_strategy,
+                    best_score,
+                    self.config.epsilon,
                 )
 
-                strategy_scores[strategy_name] = aggregated_score
+                return (best_strategy, best_score)
 
-                logger.debug(
-                    "Strategy '%s' scores: pattern=%.2f, perf=%.2f, "
-                    "context=%.2f → total=%.2f",
-                    strategy_name,
-                    pattern_score,
-                    perf_score,
-                    context_score,
-                    aggregated_score,
+            except (ValueError, KeyError) as e:
+                logger.error(
+                    "Invalid input in select_best_strategy: %s", e, exc_info=True
                 )
-
-            # Select best strategy
-            best_strategy = max(strategy_scores, key=strategy_scores.get)
-            best_score = strategy_scores[best_strategy]
-
-            # Decay epsilon over time
-            self.config.epsilon = max(
-                self.config.min_epsilon, self.config.epsilon * self.config.epsilon_decay
-            )
-
-            logger.info(
-                "Selected strategy '%s' with score %.2f (epsilon=%.3f)",
-                best_strategy,
-                best_score,
-                self.config.epsilon,
-            )
-
-            return (best_strategy, best_score)
-
-        except Exception as e:
-            logger.error("Error selecting strategy: %s", e, exc_info=True)
-            return ("direct_answer", 0.3)  # Safe fallback
+                return ("direct_answer", 0.3)
+            except Exception as e:
+                logger.critical(
+                    "Unexpected error selecting strategy: %s", e, exc_info=True
+                )
+                raise StrategySelectionException(
+                    f"Failed to select strategy: {e}"
+                ) from e
 
     # ========================================================================
     # Scoring Components
@@ -505,9 +670,12 @@ class MetaLearningEngine:
             matching_pattern
             and max_similarity >= self.config.pattern_similarity_threshold
         ):
-            # Gewichte similarity mit Pattern success rate
+            # Gewichte similarity mit Pattern success rate (use config weights)
             pattern_success = matching_pattern.success_rate
-            return max_similarity * 0.6 + pattern_success * 0.4
+            return (
+                max_similarity * self.config.pattern_similarity_weight
+                + pattern_success * self.config.pattern_success_weight
+            )
 
         return 0.5  # Kein passendes Pattern gefunden
 
@@ -522,15 +690,25 @@ class MetaLearningEngine:
         if stats.queries_handled < self.config.min_queries_for_confidence:
             return 0.5
 
-        # Weighted combination von Success Rate und Avg Confidence
+        # Weighted combination von Success Rate und Avg Confidence (use config weights)
         success_component = stats.success_rate
         confidence_component = stats.avg_confidence
 
         # Zusätzlich: Bonus für schnelle Response Time
-        # Normalisiere response time (angenommen: <1s = gut, >5s = schlecht)
-        speed_bonus = max(0, 1.0 - stats.avg_response_time / 5.0) * 0.1
+        # Normalisiere response time (use config threshold)
+        speed_bonus = (
+            max(
+                0,
+                1.0 - stats.avg_response_time / self.config.performance_speed_threshold,
+            )
+            * self.config.performance_speed_bonus_max
+        )
 
-        score = success_component * 0.6 + confidence_component * 0.4 + speed_bonus
+        score = (
+            success_component * self.config.performance_success_weight
+            + confidence_component * self.config.performance_confidence_weight
+            + speed_bonus
+        )
 
         return min(1.0, score)
 
@@ -600,7 +778,12 @@ class MetaLearningEngine:
         query_embedding: List[float],
         success: Optional[bool],
     ) -> None:
-        """Update Query-Patterns für Strategy"""
+        """
+        Update Query-Patterns für Strategy.
+
+        Note: Called within _lock context from record_strategy_usage,
+        so no additional locking needed.
+        """
         try:
             # Finde ähnliche existierende Patterns
             existing_pattern = None
@@ -624,9 +807,9 @@ class MetaLearningEngine:
                 if success:
                     existing_pattern.success_count += 1
             else:
-                # Neues Pattern erstellen
+                # Neues Pattern erstellen (use config truncation length)
                 new_pattern = QueryPattern(
-                    pattern_text=query[:100],  # Truncate
+                    pattern_text=query[: self.config.query_truncate_length],
                     embedding=query_embedding,
                     associated_strategy=strategy,
                     success_count=1 if success else 0,
@@ -643,8 +826,12 @@ class MetaLearningEngine:
                     self.query_patterns[strategy].sort(key=lambda p: p.success_rate)
                     self.query_patterns[strategy].pop(0)
 
+        except (TypeError, ValueError) as e:
+            logger.error("Invalid data in update_query_patterns: %s", e, exc_info=True)
         except Exception as e:
-            logger.error("Error updating query patterns: %s", e)
+            logger.critical(
+                "Unexpected error updating query patterns: %s", e, exc_info=True
+            )
 
     def _extract_failure_pattern(
         self, query: str, result: Dict[str, Any]
@@ -681,111 +868,123 @@ class MetaLearningEngine:
     # ========================================================================
 
     def _persist_all_stats(self) -> None:
-        """Persistiere alle Strategy-Statistiken in Neo4j"""
-        try:
-            for strategy_name, stats in self.strategy_stats.items():
-                self._persist_strategy_stats(strategy_name, stats)
+        """
+        Persistiere alle Strategy-Statistiken in Neo4j (atomic transaction).
 
-            logger.info(
-                "Persisted stats for %d strategies to Neo4j", len(self.strategy_stats)
-            )
+        Uses single transaction for all strategies to prevent partial updates.
+        """
+        with self._lock:
+            try:
+                with self.netzwerk.driver.session() as session:
+                    with session.begin_transaction() as tx:
+                        for strategy_name, stats in self.strategy_stats.items():
+                            query = """
+                            MERGE (sp:StrategyPerformance {strategy_name: $strategy_name})
+                            SET sp.queries_handled = $queries_handled,
+                                sp.success_count = $success_count,
+                                sp.failure_count = $failure_count,
+                                sp.success_rate = $success_rate,
+                                sp.avg_confidence = $avg_confidence,
+                                sp.avg_response_time = $avg_response_time,
+                                sp.failure_modes = $failure_modes,
+                                sp.last_used = datetime($last_used),
+                                sp.updated_at = datetime()
+                            RETURN sp
+                            """
 
-        except Exception as e:
-            logger.error("Error persisting stats: %s", e)
+                            tx.run(
+                                query,
+                                {
+                                    "strategy_name": strategy_name,
+                                    "queries_handled": stats.queries_handled,
+                                    "success_count": stats.success_count,
+                                    "failure_count": stats.failure_count,
+                                    "success_rate": stats.success_rate,
+                                    "avg_confidence": stats.avg_confidence,
+                                    "avg_response_time": stats.avg_response_time,
+                                    "failure_modes": stats.failure_modes,
+                                    "last_used": (
+                                        stats.last_used.isoformat()
+                                        if stats.last_used
+                                        else None
+                                    ),
+                                },
+                            )
 
-    def _persist_strategy_stats(
-        self, strategy_name: str, stats: StrategyPerformance
-    ) -> None:
-        """Persistiere einzelne Strategy-Stats in Neo4j"""
-        try:
-            # Erstelle/Update StrategyPerformance Node
-            query = """
-            MERGE (sp:StrategyPerformance {strategy_name: $strategy_name})
-            SET sp.queries_handled = $queries_handled,
-                sp.success_count = $success_count,
-                sp.failure_count = $failure_count,
-                sp.success_rate = $success_rate,
-                sp.avg_confidence = $avg_confidence,
-                sp.avg_response_time = $avg_response_time,
-                sp.failure_modes = $failure_modes,
-                sp.last_used = datetime($last_used),
-                sp.updated_at = datetime()
-            RETURN sp
-            """
+                        tx.commit()
 
-            result = self._execute_query(
-                query,
-                {
-                    "strategy_name": strategy_name,
-                    "queries_handled": stats.queries_handled,
-                    "success_count": stats.success_count,
-                    "failure_count": stats.failure_count,
-                    "success_rate": stats.success_rate,
-                    "avg_confidence": stats.avg_confidence,
-                    "avg_response_time": stats.avg_response_time,
-                    "failure_modes": stats.failure_modes,
-                    "last_used": (
-                        stats.last_used.isoformat() if stats.last_used else None
-                    ),
-                },
-            )
+                logger.info(
+                    "Persisted stats for %d strategies to Neo4j (atomic transaction)",
+                    len(self.strategy_stats),
+                )
 
-            if result:
-                logger.debug("Persisted stats for strategy '%s'", strategy_name)
-
-        except Exception as e:
-            logger.error(
-                "Error persisting strategy stats for '%s': %s", strategy_name, e
-            )
+            except Neo4jError as e:
+                logger.error(
+                    "Neo4j error persisting stats (rolled back): %s", e, exc_info=True
+                )
+                raise PersistenceException(f"Failed to persist stats: {e}") from e
+            except Exception as e:
+                logger.critical(
+                    "Unexpected error persisting stats: %s", e, exc_info=True
+                )
+                raise
 
     def _load_persisted_stats(self) -> None:
         """Lade Strategy-Statistiken aus Neo4j"""
-        try:
-            query = """
-            MATCH (sp:StrategyPerformance)
-            RETURN sp.strategy_name AS strategy_name,
-                   sp.queries_handled AS queries_handled,
-                   sp.success_count AS success_count,
-                   sp.failure_count AS failure_count,
-                   sp.success_rate AS success_rate,
-                   sp.avg_confidence AS avg_confidence,
-                   sp.avg_response_time AS avg_response_time,
-                   sp.failure_modes AS failure_modes,
-                   sp.last_used AS last_used
-            """
+        with self._lock:
+            try:
+                query = """
+                MATCH (sp:StrategyPerformance)
+                RETURN sp.strategy_name AS strategy_name,
+                       sp.queries_handled AS queries_handled,
+                       sp.success_count AS success_count,
+                       sp.failure_count AS failure_count,
+                       sp.success_rate AS success_rate,
+                       sp.avg_confidence AS avg_confidence,
+                       sp.avg_response_time AS avg_response_time,
+                       sp.failure_modes AS failure_modes,
+                       sp.last_used AS last_used
+                """
 
-            results = self._execute_query(query)
+                results = self._execute_query(query)
 
-            for record in results:
-                strategy_name = record["strategy_name"]
+                for record in results:
+                    strategy_name = record["strategy_name"]
 
-                stats = StrategyPerformance(
-                    strategy_name=strategy_name,
-                    queries_handled=record["queries_handled"] or 0,
-                    success_count=record["success_count"] or 0,
-                    failure_count=record["failure_count"] or 0,
-                    success_rate=record["success_rate"] or 0.5,
-                    avg_confidence=record["avg_confidence"] or 0.0,
-                    avg_response_time=record["avg_response_time"] or 0.0,
-                    total_response_time=0.0,  # Wird neu berechnet
-                    typical_query_patterns=[],  # TODO: Load from separate nodes
-                    failure_modes=record["failure_modes"] or [],
-                    last_used=None,  # TODO: Parse datetime
+                    stats = StrategyPerformance(
+                        strategy_name=strategy_name,
+                        queries_handled=record["queries_handled"] or 0,
+                        success_count=record["success_count"] or 0,
+                        failure_count=record["failure_count"] or 0,
+                        success_rate=record["success_rate"] or 0.5,
+                        avg_confidence=record["avg_confidence"] or 0.0,
+                        avg_response_time=record["avg_response_time"] or 0.0,
+                        total_response_time=0.0,  # Wird neu berechnet
+                        typical_query_patterns=[],  # TODO: Load from separate nodes
+                        failure_modes=record["failure_modes"] or [],
+                        last_used=None,  # TODO: Parse datetime
+                    )
+
+                    # Recalculate total_response_time
+                    stats.total_response_time = (
+                        stats.avg_response_time * stats.queries_handled
+                    )
+
+                    self.strategy_stats[strategy_name] = stats
+
+                logger.info(
+                    "Loaded %d strategy statistics from Neo4j", len(self.strategy_stats)
                 )
 
-                # Recalculate total_response_time
-                stats.total_response_time = (
-                    stats.avg_response_time * stats.queries_handled
+            except PersistenceException:
+                # Re-raise PersistenceException from _execute_query
+                raise
+            except (KeyError, TypeError, ValueError) as e:
+                logger.error(
+                    "Invalid data loading persisted stats: %s", e, exc_info=True
                 )
-
-                self.strategy_stats[strategy_name] = stats
-
-            logger.info(
-                "Loaded %d strategy statistics from Neo4j", len(self.strategy_stats)
-            )
-
-        except Exception as e:
-            logger.error("Error loading persisted stats: %s", e)
+            except Exception as e:
+                logger.warning("Could not load persisted stats (starting fresh): %s", e)
 
     # ========================================================================
     # Dual-System Performance Tracking (Pipeline vs. Production System)
@@ -822,12 +1021,14 @@ class MetaLearningEngine:
             user_feedback: 'correct', 'incorrect', 'neutral'
             context: Optional Context Dict
             metadata: Zusätzliche Metadaten (z.B. cycles, sentences)
+
+        Raises:
+            ValueError: If system is not 'pipeline' or 'production'
         """
         if system not in ["pipeline", "production"]:
-            logger.warning(
+            raise ValueError(
                 f"Unknown generation system '{system}', expected 'pipeline' or 'production'"
             )
-            return
 
         # Erstelle result dict
         result = {
@@ -852,9 +1053,16 @@ class MetaLearningEngine:
             user_feedback=user_feedback,
         )
 
+        # Sanitize for logging
+        safe_query = self._sanitize_for_logging(query, max_len=50)
         logger.debug(
-            f"Recorded {system} system usage | confidence={confidence:.2f}, "
-            f"response_time={response_time:.3f}s, length={len(response_text) if response_text else 0}"
+            "Recorded %s system usage | query='%s', confidence=%.2f, "
+            "response_time=%.3fs, length=%d",
+            system,
+            safe_query,
+            confidence,
+            response_time,
+            len(response_text) if response_text else 0,
         )
 
     def get_generation_system_comparison(self) -> Dict[str, Any]:
@@ -929,20 +1137,40 @@ class MetaLearningEngine:
     # ========================================================================
 
     def _cosine_similarity(self, vec1: List[float], vec2: List[float]) -> float:
-        """Berechne Cosine Similarity zwischen zwei Vektoren"""
+        """
+        Berechne Cosine Similarity zwischen zwei Vektoren.
+
+        Args:
+            vec1: First vector
+            vec2: Second vector
+
+        Returns:
+            Cosine similarity [0.0, 1.0] or 0.0 if vectors are invalid
+        """
         try:
             import math
+
+            # Validate inputs
+            if not vec1 or not vec2 or len(vec1) != len(vec2):
+                logger.warning(
+                    "Invalid vectors for cosine similarity: len(vec1)=%d, len(vec2)=%d",
+                    len(vec1) if vec1 else 0,
+                    len(vec2) if vec2 else 0,
+                )
+                return 0.0
 
             dot_product = sum(a * b for a, b in zip(vec1, vec2))
             magnitude1 = math.sqrt(sum(a * a for a in vec1))
             magnitude2 = math.sqrt(sum(b * b for b in vec2))
 
+            # Handle zero vectors
             if magnitude1 == 0 or magnitude2 == 0:
                 return 0.0
 
             return dot_product / (magnitude1 * magnitude2)
 
-        except Exception:
+        except (TypeError, ValueError, ZeroDivisionError) as e:
+            logger.warning("Error computing cosine similarity: %s", e)
             return 0.0
 
     def get_strategy_stats(
@@ -958,24 +1186,29 @@ class MetaLearningEngine:
         Returns:
             StrategyPerformance oder None
         """
-        # Cache Lookup
-        if use_cache and strategy_name in self._stats_cache:
-            logger.debug(f"Stats cache HIT for strategy '{strategy_name}'")
-            return self._stats_cache[strategy_name]
+        # Cache Lookup (thread-safe)
+        if use_cache:
+            with self._cache_lock:
+                if strategy_name in self._stats_cache:
+                    logger.debug("Stats cache HIT for strategy '%s'", strategy_name)
+                    return self._stats_cache[strategy_name]
 
-        # Get from in-memory stats
-        stats = self.strategy_stats.get(strategy_name)
+        # Get from in-memory stats (thread-safe)
+        with self._lock:
+            stats = self.strategy_stats.get(strategy_name)
 
-        # Cache Write
+        # Cache Write (thread-safe)
         if use_cache and stats is not None:
-            self._stats_cache[strategy_name] = stats
-            logger.debug(f"Cached stats for strategy '{strategy_name}'")
+            with self._cache_lock:
+                self._stats_cache[strategy_name] = stats
+                logger.debug("Cached stats for strategy '%s'", strategy_name)
 
         return stats
 
     def get_all_stats(self) -> Dict[str, StrategyPerformance]:
-        """Hole alle Strategy-Stats"""
-        return self.strategy_stats.copy()
+        """Hole alle Strategy-Stats (thread-safe copy)"""
+        with self._lock:
+            return self.strategy_stats.copy()
 
     def get_top_strategies(self, n: int = 5) -> List[Tuple[str, float]]:
         """
@@ -984,19 +1217,21 @@ class MetaLearningEngine:
         Returns:
             List of (strategy_name, score) tuples
         """
-        strategy_scores = []
+        with self._lock:
+            strategy_scores = []
 
-        for name, stats in self.strategy_stats.items():
-            score = self._calculate_performance_score(stats)
-            strategy_scores.append((name, score))
+            for name, stats in self.strategy_stats.items():
+                score = self._calculate_performance_score(stats)
+                strategy_scores.append((name, score))
 
-        strategy_scores.sort(key=lambda x: x[1], reverse=True)
-        return strategy_scores[:n]
+            strategy_scores.sort(key=lambda x: x[1], reverse=True)
+            return strategy_scores[:n]
 
     def reset_epsilon(self, new_epsilon: float = 0.1) -> None:
         """Reset Epsilon für neue Exploration-Phase"""
-        self.config.epsilon = new_epsilon
-        logger.info("Reset epsilon to %.3f", new_epsilon)
+        with self._lock:
+            self.config.epsilon = new_epsilon
+            logger.info("Reset epsilon to %.3f", new_epsilon)
 
     def clear_cache(self, cache_type: Optional[str] = None) -> None:
         """
@@ -1006,12 +1241,14 @@ class MetaLearningEngine:
             cache_type: 'stats', 'patterns', oder None für beide
         """
         if cache_type == "stats" or cache_type is None:
-            self._stats_cache.clear()
-            logger.info("Strategy stats cache cleared")
+            with self._cache_lock:
+                self._stats_cache.clear()
+                logger.info("Strategy stats cache cleared")
 
         if cache_type == "patterns" or cache_type is None:
-            self._pattern_cache.clear()
-            logger.info("Query pattern cache cleared")
+            with self._cache_lock:
+                self._pattern_cache.clear()
+                logger.info("Query pattern cache cleared")
 
     def get_cache_stats(self) -> Dict[str, Dict[str, Any]]:
         """
@@ -1020,23 +1257,28 @@ class MetaLearningEngine:
         Returns:
             Dict mit Cache-Größen und TTLs
         """
-        return {
-            "stats_cache": {
-                "size": len(self._stats_cache),
-                "maxsize": self._stats_cache.maxsize,
-                "ttl": self._stats_cache.ttl,
-            },
-            "pattern_cache": {
-                "size": len(self._pattern_cache),
-                "maxsize": self._pattern_cache.maxsize,
-                "ttl": self._pattern_cache.ttl,
-            },
-            "in_memory_stats": {
+        with self._cache_lock:
+            cache_stats = {
+                "stats_cache": {
+                    "size": len(self._stats_cache),
+                    "maxsize": self._stats_cache.maxsize,
+                    "ttl": self._stats_cache.ttl,
+                },
+                "pattern_cache": {
+                    "size": len(self._pattern_cache),
+                    "maxsize": self._pattern_cache.maxsize,
+                    "ttl": self._pattern_cache.ttl,
+                },
+            }
+
+        with self._lock:
+            cache_stats["in_memory_stats"] = {
                 "strategies": len(self.strategy_stats),
                 "total_queries": self.total_queries,
                 "usage_history_size": len(self.usage_history),
-            },
-        }
+            }
+
+        return cache_stats
 
 
 # ============================================================================

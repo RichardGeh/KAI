@@ -2,16 +2,19 @@
 """
 Explizite Befehls-Erkennung via Regex-Pattern.
 Erkennt eindeutige Befehle mit confidence=1.0.
+
+WICHTIG: KEINE Unicode-Zeichen verwenden, die Windows cp1252 Encoding-Probleme verursachen.
+Verboten: OK FEHLER -> x / != <= >= etc.
+Erlaubt: [OK] [FEHLER] -> * / != <= >= AND OR NOT
 """
 import re
-import uuid
 
 from component_5_linguistik_strukturen import (
     MeaningPoint,
     MeaningPointCategory,
     Modality,
-    Polarity,
 )
+from component_7_meaning_point_factory import create_meaning_point
 from component_15_logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -42,7 +45,7 @@ class CommandParser:
             if define_match:
                 topic, key_path_str, value = define_match.groups()
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.COMMAND,
                         cue="definiere:",
                         text_span=text,
@@ -71,7 +74,7 @@ class CommandParser:
                     relation_type = "IS_A"
 
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.COMMAND,
                         cue="lerne muster:",
                         text_span=text,
@@ -92,7 +95,7 @@ class CommandParser:
             if ingest_match:
                 text_to_ingest = ingest_match.group(1)
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.COMMAND,
                         cue="ingestiere text:",
                         text_span=text,
@@ -110,7 +113,7 @@ class CommandParser:
             if learn_simple_match:
                 text_to_learn = learn_simple_match.group(1).strip()
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.COMMAND,
                         cue="lerne:",
                         text_span=text,
@@ -149,7 +152,7 @@ class CommandParser:
                     command_cue = "lade datei:"
 
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.COMMAND,
                         cue=command_cue,
                         text_span=text,
@@ -167,42 +170,3 @@ class CommandParser:
         except Exception as e:
             logger.error(f"Fehler beim Parsen expliziter Befehle: {e}", exc_info=True)
             return None
-
-    def _create_meaning_point(self, **kwargs) -> MeaningPoint:
-        """
-        Factory-Methode zum Erstellen von MeaningPoint-Objekten mit sinnvollen Defaults.
-
-        Args:
-            **kwargs: Beliebige MeaningPoint-Attribute (überschreiben Defaults)
-
-        Returns:
-            Ein vollständig initialisiertes MeaningPoint-Objekt
-        """
-        try:
-            # Sinnvolle Defaults
-            defaults = {
-                "id": f"mp-{uuid.uuid4().hex[:6]}",
-                "modality": Modality.DECLARATIVE,
-                "polarity": Polarity.POSITIVE,
-                "confidence": 0.7,  # Konservativ, wird oft überschrieben
-                "arguments": {},
-                "span_offsets": [],
-                "source_rules": [],
-            }
-
-            # Kategorie-spezifische Modality
-            category = kwargs.get("category")
-            if category == MeaningPointCategory.QUESTION:
-                defaults["modality"] = Modality.INTERROGATIVE
-            elif category == MeaningPointCategory.COMMAND:
-                defaults["modality"] = Modality.IMPERATIVE
-
-            # Merge mit übergebenen Parametern
-            defaults.update(kwargs)
-
-            return MeaningPoint(**defaults)
-
-        except Exception as e:
-            logger.error(f"Fehler beim Erstellen des MeaningPoints: {e}", exc_info=True)
-            # Rethrow, da ein MeaningPoint essentiell ist
-            raise

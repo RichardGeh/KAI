@@ -162,9 +162,9 @@ class ObservationInferenceRule:
      and condition C holds, then infer property Q with value W about self"
 
     Examples:
-    - Blue Eyes: "I see N-1 with blue eyes, and it's day N → I have blue eyes"
-    - Muddy Children: "I see N muddy, nobody left → I'm muddy"
-    - Hat Puzzle: "I see pattern X → my hat is color Y"
+    - Blue Eyes: "I see N-1 with blue eyes, and it's day N -> I have blue eyes"
+    - Muddy Children: "I see N muddy, nobody left -> I'm muddy"
+    - Hat Puzzle: "I see pattern X -> my hat is color Y"
 
     GENERIC - No puzzle-specific logic!
     """
@@ -231,8 +231,8 @@ class AbsenceReasoningRule:
     "If action A did NOT occur by turn T under condition C, then infer knowledge K"
 
     Examples:
-    - Blue Eyes: "Nobody departed on day N-1 → all see at least N-1"
-    - Muddy Children: "Nobody said 'I don't know' → constraint tightens"
+    - Blue Eyes: "Nobody departed on day N-1 -> all see at least N-1"
+    - Muddy Children: "Nobody said 'I don't know' -> constraint tightens"
 
     GENERIC - No puzzle-specific logic!
     """
@@ -277,8 +277,8 @@ class EliminationConstraint:
      eliminate possibilities and infer about self"
 
     Examples:
-    - Blue Eyes: "≥1 has blue eyes, I see N-1 → I'm the Nth"
-    - Sum Puzzle: "Total is X, I see Y → mine is X-Y"
+    - Blue Eyes: ">=1 has blue eyes, I see N-1 -> I'm the Nth"
+    - Sum Puzzle: "Total is X, I see Y -> mine is X-Y"
 
     GENERIC - No puzzle-specific logic!
     """
@@ -393,7 +393,7 @@ class EpistemicReasoner:
     - Action triggers
     """
 
-    def __init__(self, engine: EpistemicEngine):
+    def __init__(self, engine: EpistemicEngine, max_trace_size: int = 10000):
         self.engine = engine
         self.netzwerk = engine.netzwerk
         self.rules: List[EpistemicRule] = []
@@ -402,8 +402,40 @@ class EpistemicReasoner:
         self.elimination_constraints: List[EliminationConstraint] = []
         self.state = ReasoningState()
         self.trace: List[ReasoningStep] = []
+        self.max_trace_size = max_trace_size  # MEMORY LEAK FIX
 
-        logger.info("EpistemicReasoner initialized (Generic)")
+        logger.info(
+            "EpistemicReasoner initialized (Generic)",
+            extra={"max_trace_size": max_trace_size},
+        )
+
+    def _add_trace_step(self, step: ReasoningStep):
+        """Add trace step with size limit (prevents memory leak)"""
+        self.trace.append(step)
+
+        # Enforce maximum trace size (rolling window)
+        if len(self.trace) > self.max_trace_size:
+            removed_steps = len(self.trace) - self.max_trace_size
+            self.trace = self.trace[removed_steps:]
+
+            logger.warning(
+                f"Trace size limit reached, removed {removed_steps} oldest steps",
+                extra={
+                    "max_trace_size": self.max_trace_size,
+                    "current_size": len(self.trace),
+                    "removed_steps": removed_steps,
+                },
+            )
+
+    def clear_trace(self):
+        """Clear reasoning trace (call between sessions to free memory)"""
+        old_size = len(self.trace)
+        self.trace.clear()
+
+        logger.info(
+            f"Reasoning trace cleared",
+            extra={"steps_cleared": old_size},
+        )
 
     def create_agent(self, agent_id: str, **properties):
         """Create agent with properties"""
@@ -492,21 +524,25 @@ class EpistemicReasoner:
 
     def establish_common_knowledge(
         self, agents: List[str], proposition: str, max_depth: int = 2
-    ):
-        """Establish common knowledge in group"""
-        count = self.engine.propagate_common_knowledge(agents, proposition, max_depth)
+    ) -> None:
+        """Establish common knowledge in group using batch operations"""
+        # Use batch version for better performance (O(N^2) -> O(1) queries)
+        count = self.engine.propagate_common_knowledge_batch(
+            agents, proposition, max_depth
+        )
         logger.info(
             f"Common knowledge established: {proposition}",
             extra={
                 "proposition": proposition,
                 "num_agents": len(agents),
                 "count": count,
+                "method": "batch",
             },
         )
 
     def solve(self, max_iterations: int = 100) -> Dict[int, List[str]]:
         """
-        Fixed-point reasoning loop (GENERIC)
+        Fixed-point reasoning loop (GENERIC) with thread-safe snapshots
 
         Applies all rules until saturation or max_iterations
         """
@@ -520,13 +556,16 @@ class EpistemicReasoner:
         for iteration in range(1, max_iterations + 1):
             self.state.turn = iteration
 
-            # Snapshot active agents at turn start (prevents race conditions)
-            self.state.turn_snapshots[iteration] = set(self.state.active_agents)
+            # CRITICAL FIX: Create immutable snapshot BEFORE any modifications
+            snapshot_agents = frozenset(self.state.active_agents)
+            self.state.turn_snapshots[iteration] = snapshot_agents
 
             logger.debug(f"=== Turn {iteration} ===", extra={"turn": iteration})
 
-            actions = self.simulate_step()
+            # Pass snapshot to simulate_step (READ-ONLY)
+            actions = self.simulate_step(snapshot=snapshot_agents)
 
+            # AFTER step: Apply actions (WRITE)
             if actions:
                 actions_by_turn[iteration] = actions
                 logger.info(
@@ -539,6 +578,7 @@ class EpistemicReasoner:
             else:
                 logger.debug(f"Turn {iteration}: No actions", extra={"turn": iteration})
 
+            # Check termination with CURRENT state
             if not self.state.active_agents:
                 logger.info(
                     "All agents inactive, terminating", extra={"turn": iteration}
@@ -555,24 +595,30 @@ class EpistemicReasoner:
 
         return actions_by_turn
 
-    def simulate_step(self) -> List[str]:
+    def simulate_step(self, snapshot: Optional[frozenset] = None) -> List[str]:
         """
-        Execute one reasoning step (GENERIC)
+        Execute one reasoning step (GENERIC) with immutable snapshot
 
         1. Apply inference rules
         2. Apply epistemic rules
         3. Return triggered actions
+
+        Args:
+            snapshot: Immutable snapshot of active agents (optional)
         """
+        # Use provided snapshot or create from current state
+        if snapshot is None:
+            snapshot = frozenset(self.state.active_agents)
+
         context = {
             "turn": self.state.turn,
             "actions": [],
-            "snapshot_agents": self.state.turn_snapshots.get(
-                self.state.turn, self.state.active_agents
-            ),
+            "snapshot_agents": snapshot,  # Immutable
         }
 
-        # Phase 1: Apply inference rules (higher priority)
-        for agent_id in list(context["snapshot_agents"]):
+        # Phase 1: Apply inference rules (iterate over SNAPSHOT, not mutable state)
+        for agent_id in snapshot:
+            # Check if agent still active (may have departed in previous rule)
             if agent_id not in self.state.active_agents:
                 continue
 
@@ -600,7 +646,8 @@ class EpistemicReasoner:
                 if rule.check_condition(agent_id, self, context):
                     rule.trigger_action(agent_id, self, context)
 
-                    self.trace.append(
+                    # MEMORY LEAK FIX: Use _add_trace_step instead of direct append
+                    self._add_trace_step(
                         ReasoningStep(
                             turn=self.state.turn,
                             step_type="rule_trigger",
@@ -691,7 +738,7 @@ def create_blue_eyes_puzzle(
         all_agents, "at_least_one_has_blue_eyes", max_depth=2
     )
 
-    # GENERIC Elimination Constraint: "I see N-1 with property P, it's day N → I have P"
+    # GENERIC Elimination Constraint: "I see N-1 with property P, it's day N -> I have P"
     def elimination_check(
         agent_id: str, reasoner: EpistemicReasoner, context: Dict
     ) -> Optional[str]:
@@ -784,8 +831,8 @@ if __name__ == "__main__":
     print(f"\nSolution: {solution}")
 
     if 3 in solution and len(solution[3]) == 3:
-        print("✓ Test passed: 3 people departed on day 3")
+        print("[OK] Test passed: 3 people departed on day 3")
     else:
-        print(f"✗ Test failed: Expected 3 departures on day 3, got {solution}")
+        print(f"[FEHLER] Test failed: Expected 3 departures on day 3, got {solution}")
 
     print("\n=== Test Complete ===")

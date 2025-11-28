@@ -4,6 +4,10 @@ Heuristik-basierte Frage-Erkennung.
 Fallback-Heuristiken für häufige Frage-Muster wenn weder explizite
 Befehle noch Vektor-Matching greifen.
 
+WICHTIG: KEINE Unicode-Zeichen verwenden, die Windows cp1252 Encoding-Probleme verursachen.
+Verboten: OK FEHLER -> x / != <= >= etc.
+Erlaubt: [OK] [FEHLER] -> * / != <= >= AND OR NOT
+
 Unterstützt:
 - W-Fragen (was, wer, wie, warum, wann, wo, welche, wozu)
 - Episodische Queries (Lernverlauf, Episoden)
@@ -11,18 +15,13 @@ Unterstützt:
 - Spezifische Info-Fragen
 """
 import re
-import uuid
 
 from spacy.tokens import Doc
 
 from component_1_netzwerk import INFO_TYPE_ALIASES
-from component_5_linguistik_strukturen import (
-    MeaningPoint,
-    MeaningPointCategory,
-    Modality,
-    Polarity,
-)
+from component_5_linguistik_strukturen import MeaningPoint, MeaningPointCategory
 from component_6_linguistik_engine import LinguisticPreprocessor
+from component_7_meaning_point_factory import create_meaning_point
 from component_15_logging_config import get_logger
 from component_utils_text_normalization import TextNormalizer
 
@@ -122,7 +121,7 @@ class QuestionHeuristicsExtractor:
             kanonischer_typ = INFO_TYPE_ALIASES.get(info_type_str.lower().strip())
             if kanonischer_typ:
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.QUESTION,
                         cue="heuristic_specific_info_question",
                         text_span=text,
@@ -145,7 +144,7 @@ class QuestionHeuristicsExtractor:
         if match_prop:
             prop_name, topic_str = match_prop.groups()
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_conceptual_property_question",
                     text_span=text,
@@ -170,7 +169,7 @@ class QuestionHeuristicsExtractor:
             topic_str_raw = match_show_all.group(1) or match_show_all.group(2)
             cleaned_topic = self.text_normalizer.clean_entity(topic_str_raw)
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_show_all_knowledge",
                     text_span=text,
@@ -199,7 +198,7 @@ class QuestionHeuristicsExtractor:
                 else None
             )
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_episodic_when_learned",
                     text_span=text,
@@ -226,7 +225,7 @@ class QuestionHeuristicsExtractor:
                 else None
             )
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_episodic_show_episodes",
                     text_span=text,
@@ -253,7 +252,7 @@ class QuestionHeuristicsExtractor:
                 else None
             )
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_episodic_learning_history",
                     text_span=text,
@@ -276,7 +275,7 @@ class QuestionHeuristicsExtractor:
             topic_str_raw = match_episodic_what_learned.group(1).strip()
             cleaned_topic = self.text_normalizer.clean_entity(topic_str_raw)
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_episodic_what_learned",
                     text_span=text,
@@ -302,7 +301,7 @@ class QuestionHeuristicsExtractor:
         if match_grid_query:
             position_str, grid_type = match_grid_query.groups()
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_spatial_grid_query",
                     text_span=text,
@@ -337,7 +336,7 @@ class QuestionHeuristicsExtractor:
             relation_type = relation_map.get(relation.lower(), "ADJACENT_TO")
 
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_spatial_relation_query",
                     text_span=text,
@@ -361,7 +360,7 @@ class QuestionHeuristicsExtractor:
         if match_path_finding:
             start, goal = match_path_finding.groups()
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_spatial_path_finding",
                     text_span=text,
@@ -385,7 +384,7 @@ class QuestionHeuristicsExtractor:
             object_name = match_position_query.group(1).strip()
             cleaned_object = self.text_normalizer.clean_entity(object_name)
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_spatial_position_query",
                     text_span=text,
@@ -413,7 +412,7 @@ class QuestionHeuristicsExtractor:
             # FIX: Höhere Confidence wenn Fragezeichen vorhanden
             confidence = 0.90 if text.rstrip().endswith("?") else 0.80
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_question_wh",
                     text_span=text,
@@ -434,7 +433,7 @@ class QuestionHeuristicsExtractor:
             topic_str = match_where_is.group(1).strip()
             cleaned_topic = self.text_normalizer.clean_entity(topic_str)
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_question_where",
                     text_span=text,
@@ -540,7 +539,7 @@ class QuestionHeuristicsExtractor:
             confidence = 0.90 if text.rstrip().endswith("?") else 0.80
 
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_question_wer",
                     text_span=text,
@@ -582,7 +581,7 @@ class QuestionHeuristicsExtractor:
             confidence = 0.90 if text.rstrip().endswith("?") else 0.80
 
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_question_wie",
                     text_span=text,
@@ -625,7 +624,7 @@ class QuestionHeuristicsExtractor:
             confidence = 0.90 if text.rstrip().endswith("?") else 0.80
 
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue=f"heuristic_question_{question_word}",
                     text_span=text,
@@ -667,7 +666,7 @@ class QuestionHeuristicsExtractor:
             confidence = 0.90 if text.rstrip().endswith("?") else 0.80
 
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue="heuristic_question_wann",
                     text_span=text,
@@ -708,7 +707,7 @@ class QuestionHeuristicsExtractor:
             cleaned_topic = self.text_normalizer.clean_entity(topic_str)
 
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.QUESTION,
                     cue=f"heuristic_question_{question_word}",
                     text_span=text,
@@ -721,42 +720,3 @@ class QuestionHeuristicsExtractor:
                 )
             ]
         return None
-
-    def _create_meaning_point(self, **kwargs) -> MeaningPoint:
-        """
-        Factory-Methode zum Erstellen von MeaningPoint-Objekten mit sinnvollen Defaults.
-
-        Args:
-            **kwargs: Beliebige MeaningPoint-Attribute (überschreiben Defaults)
-
-        Returns:
-            Ein vollständig initialisiertes MeaningPoint-Objekt
-        """
-        try:
-            # Sinnvolle Defaults
-            defaults = {
-                "id": f"mp-{uuid.uuid4().hex[:6]}",
-                "modality": Modality.DECLARATIVE,
-                "polarity": Polarity.POSITIVE,
-                "confidence": 0.7,  # Konservativ, wird oft überschrieben
-                "arguments": {},
-                "span_offsets": [],
-                "source_rules": [],
-            }
-
-            # Kategorie-spezifische Modality
-            category = kwargs.get("category")
-            if category == MeaningPointCategory.QUESTION:
-                defaults["modality"] = Modality.INTERROGATIVE
-            elif category == MeaningPointCategory.COMMAND:
-                defaults["modality"] = Modality.IMPERATIVE
-
-            # Merge mit übergebenen Parametern
-            defaults.update(kwargs)
-
-            return MeaningPoint(**defaults)
-
-        except Exception as e:
-            logger.error(f"Fehler beim Erstellen des MeaningPoints: {e}", exc_info=True)
-            # Rethrow, da ein MeaningPoint essentiell ist
-            raise

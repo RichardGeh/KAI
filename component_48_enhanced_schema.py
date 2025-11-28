@@ -14,11 +14,35 @@ Design-Prinzipien:
 """
 
 import json
-from typing import Optional
+import re
+import threading
+from typing import Optional, Set
 
 from component_15_logging_config import get_logger
 
 logger = get_logger(__name__)
+
+
+# ==================== CONSTANTS ====================
+
+# Whitelist for allowed relation types (injection prevention)
+ALLOWED_RELATION_TYPES: Set[str] = {
+    "IS_A",
+    "HAS_PROPERTY",
+    "CAPABLE_OF",
+    "PART_OF",
+    "LOCATED_IN",
+    "SYNONYM_OF",
+    "SIMILAR_TO",
+    "RELATED_TO",
+    "EQUIVALENT_TO",
+    "OPPOSITE_OF",
+    "TRIGGERS",
+    "CONNECTION",
+}
+
+# Entity name validation pattern
+ENTITY_NAME_PATTERN = re.compile(r"^[a-z_][a-z0-9_]{0,63}$")
 
 
 # ==================== SCHEMA DEFINITIONS ====================
@@ -169,7 +193,50 @@ class EnhancedSchemaManager:
             netzwerk: KonzeptNetzwerk-Instanz für DB-Zugriff
         """
         self.netzwerk = netzwerk
+
+        # Thread safety for Neo4j access
+        self._neo4j_lock = threading.RLock()
+
         logger.info("EnhancedSchemaManager initialisiert")
+
+    # ==================== VALIDATION METHODS ====================
+
+    def _validate_entity_name(self, name: str) -> None:
+        """
+        Validates entity name against whitelist pattern.
+
+        Args:
+            name: Entity name to validate
+
+        Raises:
+            ValueError: If name doesn't match pattern
+        """
+        if not ENTITY_NAME_PATTERN.match(name.lower()):
+            raise ValueError(
+                f"Invalid entity name: '{name}'. "
+                f"Must match pattern: lowercase alphanumeric + underscore, max 64 chars"
+            )
+
+    def _validate_relation_type(self, relation_type: str) -> str:
+        """
+        Validates relation type against whitelist.
+
+        Args:
+            relation_type: Relation type to validate
+
+        Returns:
+            Uppercase relation type
+
+        Raises:
+            ValueError: If relation type not in whitelist
+        """
+        safe_relation = relation_type.upper()
+        if safe_relation not in ALLOWED_RELATION_TYPES:
+            raise ValueError(
+                f"Invalid relation type: {relation_type}. "
+                f"Allowed types: {', '.join(sorted(ALLOWED_RELATION_TYPES))}"
+            )
+        return safe_relation
 
     # ==================== NODE PROPERTY METHODS ====================
 
@@ -193,6 +260,13 @@ class EnhancedSchemaManager:
         Returns:
             True bei Erfolg, False bei Fehler
         """
+        # Validate entity name
+        try:
+            self._validate_entity_name(lemma)
+        except ValueError as e:
+            logger.error(f"Invalid entity name: {e}")
+            return False
+
         if not self.netzwerk or not self.netzwerk.driver:
             logger.warning("Kein Netzwerk-Driver verfügbar")
             return False
@@ -203,9 +277,10 @@ class EnhancedSchemaManager:
                 lemma, pos
             )
 
-            with self.netzwerk.driver.session(database="neo4j") as session:
-                session.run(
-                    """
+            with self._neo4j_lock:
+                with self.netzwerk.driver.session(database="neo4j") as session:
+                    session.run(
+                        """
                     MATCH (k:Konzept {name: $lemma})
                     SET k.pos = $pos,
                         k.definitions = [],
@@ -220,11 +295,11 @@ class EnhancedSchemaManager:
                         END,
                         k.last_used = NULL
                     """,
-                    lemma=lemma.lower(),
-                    pos=pos,
-                    semantic_field=semantic_field,
-                    abstraction_level=abstraction_level,
-                )
+                        lemma=lemma.lower(),
+                        pos=pos,
+                        semantic_field=semantic_field,
+                        abstraction_level=abstraction_level,
+                    )
 
             logger.debug(
                 f"Node properties initialisiert: {lemma} "
@@ -423,6 +498,15 @@ class EnhancedSchemaManager:
         Returns:
             True bei Erfolg
         """
+        # Validate inputs
+        try:
+            self._validate_entity_name(subject)
+            self._validate_entity_name(object_)
+            safe_relation = self._validate_relation_type(relation_type)
+        except ValueError as e:
+            logger.error(f"Validation error: {e}")
+            return False
+
         if not self.netzwerk or not self.netzwerk.driver:
             return False
 
@@ -432,36 +516,53 @@ class EnhancedSchemaManager:
                 relation_type
             )
 
-            # Sanitize relation_type für Cypher
-            import re
-
-            safe_relation = re.sub(r"[^a-zA-Z0-9_]", "", relation_type.upper())
-
-            with self.netzwerk.driver.session(database="neo4j") as session:
-                session.run(
-                    f"""
-                    MATCH (s:Konzept {{name: $subject}})-[r:{safe_relation}]->(o:Konzept {{name: $object}})
-                    SET r.context = COALESCE(r.context, []),
-                        r.bidirectional = $bidirectional,
-                        r.inference_rule = $inference_rule,
-                        r.usage_count = COALESCE(r.usage_count, 0),
-                        r.last_reinforced = NULL
-                    """,
-                    subject=subject.lower(),
-                    object=object_.lower(),
-                    bidirectional=is_bidirectional,
-                    inference_rule=inference_rule,
-                )
+            with self._neo4j_lock:
+                with self.netzwerk.driver.session(database="neo4j") as session:
+                    # Use WHERE clause with type() function instead of f-string
+                    session.run(
+                        """
+                        MATCH (s:Konzept {name: $subject})-[r]->(o:Konzept {name: $object})
+                        WHERE type(r) = $relation_type
+                        SET r.context = COALESCE(r.context, []),
+                            r.bidirectional = $bidirectional,
+                            r.inference_rule = $inference_rule,
+                            r.usage_count = COALESCE(r.usage_count, 0),
+                            r.last_reinforced = NULL
+                        """,
+                        subject=subject.lower(),
+                        object=object_.lower(),
+                        relation_type=safe_relation,
+                        bidirectional=is_bidirectional,
+                        inference_rule=inference_rule,
+                    )
 
             logger.debug(
                 f"Relation properties initialisiert: {subject} -{relation_type}-> {object_}"
             )
             return True
 
+        except ValueError as e:
+            logger.error(
+                "Validation error beim Initialisieren von Relation Properties",
+                exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation_type": relation_type,
+                    "object": object_,
+                    "error_type": "ValueError",
+                },
+            )
+            return False
         except Exception as e:
             logger.error(
-                f"Fehler beim Initialisieren von Relation Properties: {e}",
+                "Fehler beim Initialisieren von Relation Properties",
                 exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation_type": relation_type,
+                    "object": object_,
+                    "error_type": type(e).__name__,
+                },
             )
             return False
 
@@ -484,37 +585,64 @@ class EnhancedSchemaManager:
         Returns:
             True bei Erfolg
         """
+        # Validate inputs
+        try:
+            self._validate_entity_name(subject)
+            self._validate_entity_name(object_)
+            safe_relation = self._validate_relation_type(relation_type)
+        except ValueError as e:
+            logger.error(f"Validation error: {e}")
+            return False
+
         if not self.netzwerk or not self.netzwerk.driver:
             return False
 
         try:
-            import re
-
-            safe_relation = re.sub(r"[^a-zA-Z0-9_]", "", relation_type.upper())
-
-            with self.netzwerk.driver.session(database="neo4j") as session:
-                session.run(
-                    f"""
-                    MATCH (s:Konzept {{name: $subject}})-[r:{safe_relation}]->(o:Konzept {{name: $object}})
-                    SET r.context = CASE
-                        WHEN r.context IS NULL THEN [$context]
-                        WHEN NOT $context IN r.context THEN r.context + $context
-                        ELSE r.context
-                    END
-                    """,
-                    subject=subject.lower(),
-                    object=object_.lower(),
-                    context=context,
-                )
+            with self._neo4j_lock:
+                with self.netzwerk.driver.session(database="neo4j") as session:
+                    # Use WHERE clause with type() function
+                    session.run(
+                        """
+                        MATCH (s:Konzept {name: $subject})-[r]->(o:Konzept {name: $object})
+                        WHERE type(r) = $relation_type
+                        SET r.context = CASE
+                            WHEN r.context IS NULL THEN [$context]
+                            WHEN NOT $context IN r.context THEN r.context + $context
+                            ELSE r.context
+                        END
+                        """,
+                        subject=subject.lower(),
+                        object=object_.lower(),
+                        relation_type=safe_relation,
+                        context=context,
+                    )
 
             logger.debug(
                 f"Kontext zu Relation hinzugefügt: {subject} -{relation_type}-> {object_}"
             )
             return True
 
+        except ValueError as e:
+            logger.error(
+                "Validation error beim Hinzufügen von Relation Context",
+                exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation_type": relation_type,
+                    "object": object_,
+                },
+            )
+            return False
         except Exception as e:
             logger.error(
-                f"Fehler beim Hinzufügen von Relation Context: {e}", exc_info=True
+                "Fehler beim Hinzufügen von Relation Context",
+                exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation_type": relation_type,
+                    "object": object_,
+                    "error_type": type(e).__name__,
+                },
             )
             return False
 
@@ -537,41 +665,73 @@ class EnhancedSchemaManager:
         Returns:
             True bei Erfolg
         """
+        # Validate inputs
+        try:
+            self._validate_entity_name(subject)
+            self._validate_entity_name(object_)
+            safe_relation = self._validate_relation_type(relation_type)
+        except ValueError as e:
+            logger.error(f"Validation error: {e}")
+            return False
+
         if not self.netzwerk or not self.netzwerk.driver:
             return False
 
         try:
-            import re
-
-            safe_relation = re.sub(r"[^a-zA-Z0-9_]", "", relation_type.upper())
-
-            with self.netzwerk.driver.session(database="neo4j") as session:
-                session.run(
-                    f"""
-                    MATCH (s:Konzept {{name: $subject}})-[r:{safe_relation}]->(o:Konzept {{name: $object}})
-                    SET r.usage_count = COALESCE(r.usage_count, 0) + 1,
-                        r.last_reinforced = datetime({{timezone: 'UTC'}})
-                    """,
-                    subject=subject.lower(),
-                    object=object_.lower(),
-                )
+            with self._neo4j_lock:
+                with self.netzwerk.driver.session(database="neo4j") as session:
+                    # Use WHERE clause with type() function
+                    session.run(
+                        """
+                        MATCH (s:Konzept {name: $subject})-[r]->(o:Konzept {name: $object})
+                        WHERE type(r) = $relation_type
+                        SET r.usage_count = COALESCE(r.usage_count, 0) + 1,
+                            r.last_reinforced = datetime({timezone: 'UTC'})
+                        """,
+                        subject=subject.lower(),
+                        object=object_.lower(),
+                        relation_type=safe_relation,
+                    )
 
             logger.debug(f"Relation reinforced: {subject} -{relation_type}-> {object_}")
             return True
 
+        except ValueError as e:
+            logger.error(
+                "Validation error beim Reinforcen von Relation",
+                exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation_type": relation_type,
+                    "object": object_,
+                },
+            )
+            return False
         except Exception as e:
-            logger.error(f"Fehler beim Reinforcen von Relation: {e}", exc_info=True)
+            logger.error(
+                "Fehler beim Reinforcen von Relation",
+                exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation_type": relation_type,
+                    "object": object_,
+                    "error_type": type(e).__name__,
+                },
+            )
             return False
 
 
 # ==================== GLOBAL INSTANCE ====================
 
 _global_schema_manager: Optional[EnhancedSchemaManager] = None
+_schema_manager_lock = threading.Lock()
 
 
 def get_schema_manager(netzwerk=None) -> EnhancedSchemaManager:
     """
     Gibt die globale EnhancedSchemaManager-Instanz zurück.
+
+    Thread-safe mit double-check locking pattern.
 
     Args:
         netzwerk: KonzeptNetzwerk-Instanz (nur beim ersten Aufruf erforderlich)
@@ -584,14 +744,17 @@ def get_schema_manager(netzwerk=None) -> EnhancedSchemaManager:
     """
     global _global_schema_manager
 
+    # Double-check locking pattern for thread safety
     if _global_schema_manager is None:
-        if netzwerk is None:
-            raise ValueError(
-                "Beim ersten Aufruf muss netzwerk-Parameter übergeben werden"
-            )
+        with _schema_manager_lock:
+            if _global_schema_manager is None:
+                if netzwerk is None:
+                    raise ValueError(
+                        "Beim ersten Aufruf muss netzwerk-Parameter übergeben werden"
+                    )
 
-        _global_schema_manager = EnhancedSchemaManager(netzwerk)
-        logger.info("Globale EnhancedSchemaManager-Instanz erstellt")
+                _global_schema_manager = EnhancedSchemaManager(netzwerk)
+                logger.info("Globale EnhancedSchemaManager-Instanz erstellt")
 
     return _global_schema_manager
 

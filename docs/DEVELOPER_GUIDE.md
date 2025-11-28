@@ -2004,6 +2004,189 @@ Index: relation_context_index, Type: RANGE (or warning if syntax unsupported)
 
 ---
 
+## Modular Architecture (2025-11 Refactoring)
+
+### Overview
+
+KAI underwent a major architectural refactoring in November 2025 to improve maintainability and scalability. 11 large components (>800 lines) were split into 32+ focused modules with clear responsibilities.
+
+### New Directory Structure
+
+```
+kai/
+├── infrastructure/          # Cross-cutting infrastructure
+│   ├── interfaces.py        # BaseReasoningEngine, ReasoningResult
+│   ├── cache_manager.py     # Unified cache management
+│   └── neo4j_session_mixin.py  # Shared Neo4j session handling
+├── common/                  # Shared utilities
+│   ├── constants.py         # Named constants (thresholds, limits)
+│   └── __init__.py
+└── ui/                      # Modular UI components
+    ├── main_window.py       # Main & analysis windows
+    ├── chat_interface.py    # Chat widget
+    ├── plan_monitor.py      # Plan monitor widget
+    ├── themes.py            # Theme management
+    └── widgets/             # Reusable UI widgets
+        ├── proof_tree_widget_core.py
+        ├── proof_tree_renderer.py
+        └── proof_tree_formatter.py
+```
+
+### Working with Split Components
+
+**Facade Pattern**: Large components use facades for backward compatibility.
+
+Example - Graph Traversal:
+```python
+# Old import (still works via facade)
+from component_12_graph_traversal import GraphTraversal
+
+# New imports (preferred for new code)
+from component_12_graph_traversal_core import GraphTraversalCore
+from component_12_traversal_strategies import TraversalStrategies
+from component_12_path_algorithms import PathAlgorithms
+```
+
+**Module Responsibilities**:
+- `*_core.py`: Core functionality, shared utilities
+- `*_strategies.py`: Algorithm implementations (BFS, DFS, etc.)
+- `*_algorithms.py`: Advanced algorithms (transitive inference, etc.)
+- `*_neo4j.py`: Neo4j integration
+- `*_engine.py`: Orchestration and coordination
+
+### Using Infrastructure
+
+**1. Cache Manager (Singleton)**
+
+```python
+from infrastructure.cache_manager import CacheManager
+
+cache_mgr = CacheManager()
+
+# Register cache at initialization
+cache_mgr.register_cache("my_cache", maxsize=100, ttl=300)
+
+# Use cache
+result = cache_mgr.get("my_cache", key)
+if result is None:
+    result = expensive_operation()
+    cache_mgr.set("my_cache", key, result)
+
+# Invalidate on writes
+cache_mgr.invalidate("my_cache", key)
+
+# Get statistics
+stats = cache_mgr.get_stats()
+```
+
+**2. Neo4j Session Mixin**
+
+```python
+from infrastructure.neo4j_session_mixin import Neo4jSessionMixin
+
+class MyComponent(Neo4jSessionMixin):
+    def __init__(self, driver):
+        super().__init__(driver)
+
+    def my_query(self):
+        query = "MATCH (n:Node) RETURN n"
+        return self._safe_run(query, "fetch nodes")
+```
+
+**3. Named Constants**
+
+```python
+from common.constants import (
+    EMBEDDING_THRESHOLD,      # 15.0
+    AUTO_SAVE_CONFIDENCE,     # 0.85
+    MAX_FILE_SIZE_LINES       # 800
+)
+
+# Use in code
+if distance < EMBEDDING_THRESHOLD:
+    ...
+```
+
+### Adding New Components
+
+**Follow the 800-Line Rule:**
+- New files should not exceed 800 lines
+- If approaching limit, consider splitting into modules
+- Use facade pattern for backward compatibility
+
+**Split Strategy:**
+1. Identify natural boundaries (core/strategies/algorithms/neo4j/UI)
+2. Create focused modules with single responsibilities
+3. Create facade for backward compatibility
+4. Use dependency injection for shared resources
+5. Ensure thread safety (use `threading.RLock` for shared state)
+
+**Example Split:**
+```
+component_X_engine.py (1,200 lines)
+→ component_X_engine.py (facade, 100 lines)
+→ component_X_core.py (core logic, 400 lines)
+→ component_X_strategies.py (algorithms, 400 lines)
+→ component_X_neo4j.py (persistence, 300 lines)
+```
+
+### Testing Split Components
+
+**Test Facades:**
+```python
+# Test that facade maintains backward compatibility
+from component_12_graph_traversal import GraphTraversal
+
+def test_facade_compatibility():
+    """Ensure facade provides same API as before"""
+    gt = GraphTraversal(netzwerk)
+    # Test all public methods still work
+```
+
+**Test Modules Independently:**
+```python
+# Test individual modules in isolation
+from component_12_traversal_strategies import TraversalStrategies
+
+def test_bfs_strategy():
+    """Test BFS algorithm independently"""
+    strategies = TraversalStrategies(netzwerk)
+    path = strategies.find_path_bfs("start", "goal")
+    assert path is not None
+```
+
+### Migration Guide
+
+**For Existing Code:**
+- Old imports continue to work (facades in place)
+- No immediate changes required
+- Consider migrating to new imports for new features
+
+**For New Code:**
+- Use new modular imports
+- Follow single responsibility principle
+- Use infrastructure (CacheManager, Neo4jSessionMixin)
+- Use named constants from `common/constants.py`
+
+### Benefits
+
+**Maintainability:**
+- Smaller, focused files easier to understand
+- Clear separation of concerns
+- Easier to test individual modules
+
+**Performance:**
+- Unified cache management
+- Thread-safe implementations
+- Better optimization opportunities
+
+**Scalability:**
+- Easy to add new strategies/algorithms
+- Clear extension points
+- Reduced coupling between components
+
+---
+
 ## Contributing
 
 When adding new code:
@@ -2015,6 +2198,8 @@ When adding new code:
 6. **Document** new features and limitations
 7. **Add caching** for expensive operations (embeddings, DB queries)
 8. **Update documentation** when adding major features
+9. **Follow 800-line rule** - split files exceeding 800 lines into modules
+10. **Use infrastructure** - CacheManager, Neo4jSessionMixin, named constants
 
 ---
 

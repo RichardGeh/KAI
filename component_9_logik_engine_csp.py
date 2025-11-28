@@ -25,6 +25,9 @@ except ImportError:
 
     logging.getLogger(__name__).warning("Constraint Reasoning Engine nicht verfügbar")
 
+# Import predicate validation from core module
+from component_9_logik_engine_core import _validate_predicate
+
 logger = get_logger(__name__)
 
 
@@ -281,19 +284,26 @@ class CSPReasoningMixin:
         if pred not in ["IS_A", "HAS_PROPERTY", "PART_OF", "LOCATED_IN", "CAPABLE_OF"]:
             return domain
 
+        # SECURITY: Validate predicate to prevent Cypher injection
+        try:
+            validated_pred = _validate_predicate(pred)
+        except ValueError as e:
+            logger.warning(f"Invalid predicate rejected in domain building: {e}")
+            return domain
+
         try:
             with self.netzwerk.driver.session(database="neo4j") as session:
                 if arg_key == "subject":
                     # Hole alle Source-Konzepte mit dieser Relation
                     query = f"""
-                        MATCH (start:Konzept)-[r:{pred}]->()
+                        MATCH (start:Konzept)-[r:{validated_pred}]->()
                         RETURN DISTINCT start.name AS value
                         LIMIT 100
                     """
                 elif arg_key == "object":
                     # Hole alle Target-Konzepte mit dieser Relation
                     query = f"""
-                        MATCH ()-[r:{pred}]->(end:Konzept)
+                        MATCH ()-[r:{validated_pred}]->(end:Konzept)
                         RETURN DISTINCT end.name AS value
                         LIMIT 100
                     """
@@ -338,7 +348,7 @@ class CSPReasoningMixin:
 
     def _find_fact_for_assignment(
         self, pred: str, arg_key: str, value: Any
-    ):  # Returns Optional[Fact]
+    ) -> Optional[Any]:  # Returns Optional[Fact]
         """
         Findet Fakt in Faktenbasis, der einer CSP-Zuweisung entspricht.
 

@@ -85,93 +85,99 @@ class KonzeptNetzwerkPatterns:
             )
 
         try:
+            # FIX: Explizite Transaktion für atomare CREATE + VERIFY Operation (Code Review 2025-11-21, Issue 3)
             with self.driver.session(database="neo4j") as session:
-                # SCHRITT 1: Erstelle/Aktualisiere die Regel mit explizitem Return
-                result = session.run(
-                    """
-                    MERGE (r:ExtractionRule {relation_type: $rel_type})
-                    ON CREATE SET
-                        r.regex_pattern = $regex,
-                        r.created_at = timestamp(),
-                        r.updated_at = timestamp()
-                    ON MATCH SET
-                        r.regex_pattern = $regex,
-                        r.updated_at = timestamp()
-                    RETURN r.relation_type AS type,
-                        r.regex_pattern AS pattern,
-                        r.created_at AS created,
-                        r.updated_at AS updated
-                    """,
-                    rel_type=relation_type,
-                    regex=regex_pattern,
-                )
-
-                record = result.single()
-
-                # SCHRITT 2: Verifikation der Rückgabe
-                if not record:
-                    logger.error(
-                        f"create_extraction_rule: Keine Rückgabe für Regel '{relation_type}'. "
-                        "Transaktion möglicherweise fehlgeschlagen."
+                with session.begin_transaction() as tx:
+                    # SCHRITT 1: Erstelle/Aktualisiere die Regel mit explizitem Return
+                    result = tx.run(
+                        """
+                        MERGE (r:ExtractionRule {relation_type: $rel_type})
+                        ON CREATE SET
+                            r.regex_pattern = $regex,
+                            r.created_at = timestamp(),
+                            r.updated_at = timestamp()
+                        ON MATCH SET
+                            r.regex_pattern = $regex,
+                            r.updated_at = timestamp()
+                        RETURN r.relation_type AS type,
+                            r.regex_pattern AS pattern,
+                            r.created_at AS created,
+                            r.updated_at AS updated
+                        """,
+                        rel_type=relation_type,
+                        regex=regex_pattern,
                     )
-                    return False
 
-                # SCHRITT 3: Validiere die gespeicherten Daten
-                if record["type"] != relation_type:
-                    logger.error(
-                        f"create_extraction_rule: Relation-Type Mismatch. "
-                        f"Erwartet: '{relation_type}', Gespeichert: '{record['type']}'"
+                    record = result.single()
+
+                    # SCHRITT 2: Verifikation der Rückgabe
+                    if not record:
+                        logger.error(
+                            f"create_extraction_rule: Keine Rückgabe für Regel '{relation_type}'. "
+                            "Transaktion möglicherweise fehlgeschlagen."
+                        )
+                        return False
+
+                    # SCHRITT 3: Validiere die gespeicherten Daten
+                    if record["type"] != relation_type:
+                        logger.error(
+                            f"create_extraction_rule: Relation-Type Mismatch. "
+                            f"Erwartet: '{relation_type}', Gespeichert: '{record['type']}'"
+                        )
+                        return False
+
+                    if record["pattern"] != regex_pattern:
+                        logger.error(
+                            f"create_extraction_rule: Pattern Mismatch für '{relation_type}'. "
+                            f"Erwartet: '{regex_pattern}', Gespeichert: '{record['pattern']}'"
+                        )
+                        return False
+
+                    # SCHRITT 4: Explizite Commit-Verifikation durch zweiten Read
+                    # Dies stellt sicher, dass die Daten wirklich persistiert wurden
+                    verify_result = tx.run(
+                        """
+                        MATCH (r:ExtractionRule {relation_type: $rel_type})
+                        RETURN count(r) AS count, r.regex_pattern AS pattern
+                        """,
+                        rel_type=relation_type,
                     )
-                    return False
 
-                if record["pattern"] != regex_pattern:
-                    logger.error(
-                        f"create_extraction_rule: Pattern Mismatch für '{relation_type}'. "
-                        f"Erwartet: '{regex_pattern}', Gespeichert: '{record['pattern']}'"
+                    verify_record = verify_result.single()
+
+                    if not verify_record or verify_record["count"] != 1:
+                        logger.error(
+                            f"create_extraction_rule: Verifikation fehlgeschlagen für '{relation_type}'. "
+                            f"Regel nicht in DB gefunden nach Commit."
+                        )
+                        return False
+
+                    if verify_record["pattern"] != regex_pattern:
+                        logger.error(
+                            f"create_extraction_rule: Verifikation zeigt falsches Pattern für '{relation_type}'"
+                        )
+                        return False
+
+                    # ERFOLG - Commit Transaktion
+                    tx.commit()
+
+                    action = (
+                        "aktualisiert"
+                        if record["created"] != record["updated"]
+                        else "erstellt"
                     )
-                    return False
-
-                # SCHRITT 4: Explizite Commit-Verifikation durch zweiten Read
-                # Dies stellt sicher, dass die Daten wirklich persistiert wurden
-                verify_result = session.run(
-                    """
-                    MATCH (r:ExtractionRule {relation_type: $rel_type})
-                    RETURN count(r) AS count, r.regex_pattern AS pattern
-                    """,
-                    rel_type=relation_type,
-                )
-
-                verify_record = verify_result.single()
-
-                if not verify_record or verify_record["count"] != 1:
-                    logger.error(
-                        f"create_extraction_rule: Verifikation fehlgeschlagen für '{relation_type}'. "
-                        f"Regel nicht in DB gefunden nach Commit."
+                    logger.info(
+                        f"Extraktionsregel '{relation_type}' erfolgreich {action} und verifiziert. "
+                        f"Pattern: {regex_pattern[:50]}..."
                     )
-                    return False
 
-                if verify_record["pattern"] != regex_pattern:
-                    logger.error(
-                        f"create_extraction_rule: Verifikation zeigt falsches Pattern für '{relation_type}'"
+                    # Invalidiere Cache nach Änderung
+                    self._extraction_rules_cache.clear()
+                    logger.debug(
+                        "Extraktionsregeln-Cache invalidiert nach Regel-Änderung"
                     )
-                    return False
 
-                # ERFOLG
-                action = (
-                    "aktualisiert"
-                    if record["created"] != record["updated"]
-                    else "erstellt"
-                )
-                logger.info(
-                    f"Extraktionsregel '{relation_type}' erfolgreich {action} und verifiziert. "
-                    f"Pattern: {regex_pattern[:50]}..."
-                )
-
-                # Invalidiere Cache nach Änderung
-                self._extraction_rules_cache.clear()
-                logger.debug("Extraktionsregeln-Cache invalidiert nach Regel-Änderung")
-
-                return True
+                    return True
 
         except Exception as e:
             logger.error(
@@ -247,20 +253,54 @@ class KonzeptNetzwerkPatterns:
         new_centroid: List[float],
         new_variance: List[float],
         new_count: int,
-    ) -> None:
+    ) -> bool:
+        """
+        Aktualisiert einen bestehenden Pattern-Prototyp.
+
+        FIX: Return-Type und Verifikation hinzugefügt (Code Review 2025-11-21, Concern 6)
+
+        Returns:
+            True wenn erfolgreich aktualisiert, False bei Fehler
+        """
         if not self.driver:
-            return
+            logger.warning("update_pattern_prototype: Kein Driver verfügbar")
+            return False
+
         with self.driver.session(database="neo4j") as session:
-            session.run(
+            # SCHRITT 1: Update mit RETURN für Verifikation
+            result = session.run(
                 """
                 MATCH (p:PatternPrototype {id: $id})
-                SET p.centroid = $centroid, p.variance = $variance, p.count = $count, p.updated_at = timestamp()
+                SET p.centroid = $centroid,
+                    p.variance = $variance,
+                    p.count = $count,
+                    p.updated_at = timestamp()
+                RETURN p.id AS id, p.count AS updated_count
                 """,
                 id=prototype_id,
                 centroid=new_centroid,
                 variance=new_variance,
                 count=new_count,
             )
+
+            # SCHRITT 2: Verifikation
+            record = result.single()
+            if not record:
+                logger.error(
+                    f"update_pattern_prototype: Prototype '{prototype_id}' nicht gefunden oder Update fehlgeschlagen"
+                )
+                return False
+
+            if record["updated_count"] != new_count:
+                logger.warning(
+                    f"update_pattern_prototype: Count-Mismatch für '{prototype_id}'. "
+                    f"Erwartet: {new_count}, Gesetzt: {record['updated_count']}"
+                )
+
+            logger.debug(
+                f"update_pattern_prototype: Prototype '{prototype_id}' erfolgreich aktualisiert"
+            )
+            return True
 
     def link_prototype_to_rule(self, prototype_id: str, relation_type: str) -> bool:
         if not self.driver:

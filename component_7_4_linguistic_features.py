@@ -2,6 +2,10 @@
 """
 Linguistische Feature-Extraktion für Meaning Extraction.
 Extrahiert temporale Marker, Quantoren, Unsicherheits-Marker und Negation.
+
+WICHTIG: KEINE Unicode-Zeichen verwenden, die Windows cp1252 Encoding-Probleme verursachen.
+Verboten: OK FEHLER -> x / != <= >= etc.
+Erlaubt: [OK] [FEHLER] -> * / != <= >= AND OR NOT
 """
 import re
 
@@ -114,7 +118,10 @@ class LinguisticFeatureExtractor:
         text_lower = text.lower()
 
         for quantifier, q_type in quantifiers_map.items():
-            if rf"\b{quantifier}\b" in text_lower or quantifier in text_lower.split():
+            if (
+                re.search(rf"\b{quantifier}\b", text_lower)
+                or quantifier in text_lower.split()
+            ):
                 logger.debug(f"Quantor erkannt: '{quantifier}' -> Type={q_type}")
                 return quantifier, q_type
 
@@ -155,7 +162,7 @@ class LinguisticFeatureExtractor:
         confidence_multiplier = 1.0
 
         for hedge, multiplier in hedge_words_map.items():
-            if rf"\b{hedge}\b" in text_lower or hedge in text_lower.split():
+            if re.search(rf"\b{hedge}\b", text_lower) or hedge in text_lower.split():
                 found_hedges.append(hedge)
                 # Nimm den niedrigsten Multiplier wenn mehrere Hedges vorhanden
                 confidence_multiplier = min(confidence_multiplier, multiplier)
@@ -202,7 +209,7 @@ class LinguisticFeatureExtractor:
 
         text_lower = text.lower()
         has_negation = any(
-            rf"\b{marker}\b" in text_lower or marker in text_lower.split()
+            re.search(rf"\b{marker}\b", text_lower) or marker in text_lower.split()
             for marker in negation_markers
         )
 

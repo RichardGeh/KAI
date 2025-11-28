@@ -32,9 +32,8 @@ class ImplicationDetector:
 
     def __init__(self, netzwerk):
         self.netzwerk = netzwerk
-        self.min_confidence_threshold = config.get(
-            "implication_auto_add_threshold", 0.75
-        )
+        # Verwende Config für Default-Confidence (nicht als Filter-Threshold)
+        self.default_confidence = config.get("implication_default_confidence", 0.85)
 
     def detect_property_implications(
         self, subject: str, property_value: str
@@ -61,7 +60,7 @@ class ImplicationDetector:
                     "subject": subject,
                     "relation": "HAS_PROPERTY",
                     "object": implied_property,
-                    "confidence": 0.85,  # Hohe Confidence für bekannte Muster
+                    "confidence": self.default_confidence,  # Nutze Config-Wert
                     "source": "property_implication",
                     "reasoning": f"'{subject} ist {property_value}' impliziert '{subject} hat {implied_property}'",
                 }

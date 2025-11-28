@@ -26,6 +26,8 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from cachetools import TTLCache
 
+from kai_exceptions import Neo4jConnectionError, Neo4jQueryError
+
 logger = logging.getLogger(__name__)
 
 
@@ -475,21 +477,42 @@ class ResonanceEngine:
                 )
                 return []
 
-            with self.netzwerk.driver.session() as session:
-                result = session.run(
-                    cypher,
-                    {
-                        "lemma": concept,
-                        "allowed_relations": allowed_relations,
-                        "current_activation": current_activation,
-                        "activation_threshold": self.activation_threshold,
-                    },
-                )
+            try:
+                with self.netzwerk.driver.session() as session:
+                    result = session.run(
+                        cypher,
+                        {
+                            "lemma": concept,
+                            "allowed_relations": allowed_relations,
+                            "current_activation": current_activation,
+                            "activation_threshold": self.activation_threshold,
+                        },
+                    )
 
-                neighbors = [
-                    (r["neighbor"], r["relation_type"], r["base_confidence"])
-                    for r in result
-                ]
+                    neighbors = [
+                        (r["neighbor"], r["relation_type"], r["base_confidence"])
+                        for r in result
+                    ]
+
+            except Exception as e:
+                # Neo4j-spezifische Fehler behandeln
+                if "ServiceUnavailable" in str(type(e).__name__):
+                    logger.error(
+                        f"Neo4j-Verbindung fehlgeschlagen für '{concept}': {e}"
+                    )
+                    raise Neo4jConnectionError(
+                        "Neo4j-Verbindung nicht verfügbar",
+                        context={"concept": concept},
+                        original_exception=e,
+                    )
+                else:
+                    logger.error(f"Neo4j-Query fehlgeschlagen für '{concept}': {e}")
+                    raise Neo4jQueryError(
+                        "Fehler beim Abrufen von Nachbarn",
+                        query=cypher[:100],  # Erste 100 Zeichen
+                        parameters={"lemma": concept},
+                        original_exception=e,
+                    )
 
             # Cache Write (mit Size-Limit)
             if len(self._neighbors_cache) >= self._neighbors_cache_max_size:
@@ -509,8 +532,18 @@ class ResonanceEngine:
 
             return neighbors
 
+        except (Neo4jConnectionError, Neo4jQueryError):
+            # Graceful degradation: Bei Neo4j-Fehler leere Liste zurückgeben
+            logger.warning(
+                f"Neo4j-Fehler bei '{concept}', fahre mit leerer Nachbarn-Liste fort"
+            )
+            return []
         except Exception as e:
-            logger.error(f"Error fetching neighbors for '{concept}': {e}")
+            # Unerwarteter Fehler
+            logger.error(
+                f"Unerwarteter Fehler beim Abrufen von Nachbarn für '{concept}': {e}",
+                exc_info=True,
+            )
             return []
 
     def _mark_resonance(self, concept: str, resonance: float, wave_depth: int):
@@ -594,7 +627,7 @@ class ResonanceEngine:
                 rp for rp in activation_map.resonance_points if rp.concept == concept
             )
             lines.append(
-                f"⭐ RESONANZ: {resonance_point.num_paths} konvergierende Pfade, "
+                f"[R] RESONANZ: {resonance_point.num_paths} konvergierende Pfade, "
                 f"Boost={resonance_point.resonance_boost:.3f}"
             )
 
@@ -639,7 +672,7 @@ class ResonanceEngine:
         if top_concepts:
             lines.append("\nTop 10 aktivierte Konzepte:")
             for i, (concept, act) in enumerate(top_concepts, 1):
-                marker = "⭐" if activation_map.is_resonance_point(concept) else "  "
+                marker = "[R]" if activation_map.is_resonance_point(concept) else "   "
                 lines.append(f"  {marker}{i}. {concept}: {act:.3f}")
 
         # Resonanz-Punkte Details
@@ -651,7 +684,7 @@ class ResonanceEngine:
                 reverse=True,
             )[:5]:
                 lines.append(
-                    f"  ⭐ {rp.concept}: {rp.num_paths} Pfade, "
+                    f"  [R] {rp.concept}: {rp.num_paths} Pfade, "
                     f"Boost={rp.resonance_boost:.3f}, Wave {rp.wave_depth}"
                 )
 
@@ -788,7 +821,11 @@ class AdaptiveResonanceEngine(ResonanceEngine):
         """
         try:
             # 1. Ermittle Graph-Größe
-            graph_size = self.netzwerk.get_node_count()
+            try:
+                graph_size = self.netzwerk.get_node_count()
+            except Exception as e:
+                logger.warning(f"Konnte Graph-Größe nicht ermitteln: {e}")
+                graph_size = 1000  # Fallback zu mittlerem Graph
 
             # 2. Hole Performance-Metriken aus MetaLearningEngine
             avg_query_time = 0.0

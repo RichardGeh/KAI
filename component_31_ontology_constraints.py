@@ -33,6 +33,29 @@ except ImportError:
 logger = get_logger(__name__)
 
 
+def safe_str(obj) -> str:
+    """
+    Convert object to cp1252-safe string for Windows compatibility.
+
+    Replaces characters that cannot be encoded in Windows cp1252 to prevent
+    UnicodeEncodeError in logging and console output.
+
+    Args:
+        obj: Object to convert to string
+
+    Returns:
+        cp1252-safe string representation
+    """
+    s = str(obj)
+    try:
+        # Test if string can be encoded in cp1252
+        s.encode("cp1252")
+        return s
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # Replace problematic characters
+        return s.encode("cp1252", errors="replace").decode("cp1252")
+
+
 @dataclass
 class OntologyConstraint:
     """
@@ -221,7 +244,8 @@ class OntologyConstraintGenerator:
             return constraints
 
         # Query Neo4j for IS_A hierarchy
-        with self.netzwerk.driver.session(database="neo4j") as session:
+        db_name = getattr(self.netzwerk, "database_name", "neo4j")
+        with self.netzwerk.driver.session(database=db_name) as session:
             # Find all parent concepts with multiple children
             query = """
                 MATCH (parent:Konzept)<-[:IS_A]-(child:Konzept)
@@ -272,8 +296,8 @@ class OntologyConstraintGenerator:
                             entities=[sib1, sib2],
                             clauses=[clause],
                             explanation=(
-                                f"'{sib1}' and '{sib2}' are mutually exclusive "
-                                f"(both children of '{parent}')"
+                                f"'{safe_str(sib1)}' and '{safe_str(sib2)}' are mutually exclusive "
+                                f"(both children of '{safe_str(parent)}')"
                             ),
                             confidence=1.0,
                         )
@@ -330,8 +354,8 @@ class OntologyConstraintGenerator:
                         entities=[prop1, prop2],
                         clauses=[clause],
                         explanation=(
-                            f"'{prop1}' and '{prop2}' are mutually exclusive "
-                            f"({group_name} conflict)"
+                            f"'{safe_str(prop1)}' and '{safe_str(prop2)}' are mutually exclusive "
+                            f"({safe_str(group_name)} conflict)"
                         ),
                         confidence=1.0,
                     )
@@ -376,7 +400,8 @@ class OntologyConstraintGenerator:
             return constraints
 
         # Query Neo4j for PART_OF hierarchy (location hierarchy)
-        with self.netzwerk.driver.session(database="neo4j") as session:
+        db_name = getattr(self.netzwerk, "database_name", "neo4j")
+        with self.netzwerk.driver.session(database=db_name) as session:
             # Find all parent locations with multiple children
             query = """
                 MATCH (parent:Konzept)<-[:PART_OF]-(child:Konzept)
@@ -417,8 +442,8 @@ class OntologyConstraintGenerator:
                             entities=[loc1, loc2],
                             clauses=[clause],
                             explanation=(
-                                f"'{loc1}' and '{loc2}' are mutually exclusive locations "
-                                f"(both parts of '{parent}')"
+                                f"'{safe_str(loc1)}' and '{safe_str(loc2)}' are mutually exclusive locations "
+                                f"(both parts of '{safe_str(parent)}')"
                             ),
                             confidence=1.0,
                         )
@@ -450,7 +475,8 @@ class OntologyConstraintGenerator:
 
         siblings = set()
 
-        with self.netzwerk.driver.session(database="neo4j") as session:
+        db_name = getattr(self.netzwerk, "database_name", "neo4j")
+        with self.netzwerk.driver.session(database=db_name) as session:
             # Find siblings via shared parent
             query = """
                 MATCH (concept:Konzept {name: $concept})-[:IS_A]->(parent:Konzept)

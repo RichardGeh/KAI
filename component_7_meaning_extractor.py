@@ -2,6 +2,10 @@
 """
 Haupt-Orchestrator für Meaning Extraction.
 
+WICHTIG: KEINE Unicode-Zeichen verwenden, die Windows cp1252 Encoding-Probleme verursachen.
+Verboten: OK FEHLER -> x / != <= >= etc.
+Erlaubt: [OK] [FEHLER] -> * / != <= >= AND OR NOT
+
 Koordiniert die zweiphasige Extraktion:
 1. Phase: Explizite Befehle (regex-basiert) mit confidence=1.0
 2. Phase: Vektor-basierte Prototypen-Erkennung mit distance-basierter confidence
@@ -14,22 +18,17 @@ Delegiert an spezialisierte Module:
 - component_7_5_arithmetic_detector: Arithmetische Fragen
 """
 import logging
-import uuid
 from typing import Any
 
 from spacy.tokens import Doc
 
-from component_5_linguistik_strukturen import (
-    MeaningPoint,
-    MeaningPointCategory,
-    Modality,
-    Polarity,
-)
+from component_5_linguistik_strukturen import MeaningPoint, MeaningPointCategory
 from component_6_linguistik_engine import LinguisticPreprocessor
 from component_7_1_command_parser import CommandParser
 from component_7_2_definition_detector import DefinitionDetector
 from component_7_3_question_heuristics import QuestionHeuristicsExtractor
 from component_7_5_arithmetic_detector import ArithmeticQuestionDetector
+from component_7_meaning_point_factory import create_meaning_point
 from component_11_embedding_service import EmbeddingService, ModelNotLoadedError
 from component_15_logging_config import get_logger
 from component_utils_text_normalization import TextNormalizer
@@ -96,11 +95,38 @@ class MeaningPointExtractor:
             Liste mit genau einem MeaningPoint (niemals leer)
         """
         try:
-            # Input-Validierung
-            if not doc or not doc.text.strip():
-                logger.debug("Leere Eingabe erhalten, keine Extraktion moeglich")
+            # Input validation
+            if doc is None:
+                logger.warning("None Doc object received in extract()")
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
+                        category=MeaningPointCategory.UNKNOWN,
+                        cue="none_input",
+                        text_span="",
+                        confidence=0.0,
+                        arguments={},
+                    )
+                ]
+
+            if not isinstance(doc, Doc):
+                logger.error(
+                    "Invalid input type in extract()",
+                    extra={"received_type": type(doc).__name__},
+                )
+                return [
+                    create_meaning_point(
+                        category=MeaningPointCategory.UNKNOWN,
+                        cue="invalid_input_type",
+                        text_span="",
+                        confidence=0.0,
+                        arguments={},
+                    )
+                ]
+
+            if not doc.text or not doc.text.strip():
+                logger.debug("Empty text in Doc object")
+                return [
+                    create_meaning_point(
                         category=MeaningPointCategory.UNKNOWN,
                         cue="empty_input",
                         text_span="",
@@ -187,7 +213,7 @@ class MeaningPointExtractor:
                 "Keine Bedeutung extrahiert",
                 extra={"text_preview": text[:50], "text_length": len(text)},
             )
-            unknown_mp = self._create_meaning_point(
+            unknown_mp = create_meaning_point(
                 category=MeaningPointCategory.UNKNOWN,
                 cue="no_match_found",
                 text_span=text,
@@ -283,7 +309,7 @@ class MeaningPointExtractor:
             arguments = self._extract_arguments_from_text(text, doc, category)
 
             # Erstelle MeaningPoint mit berechneter Confidence
-            mp = self._create_meaning_point(
+            mp = create_meaning_point(
                 category=category,
                 cue=f"vector_match_{prototype['id'][:8]}",
                 text_span=text,
@@ -384,42 +410,3 @@ class MeaningPointExtractor:
             arguments["text"] = text
 
         return arguments
-
-    def _create_meaning_point(self, **kwargs) -> MeaningPoint:
-        """
-        Factory-Methode zum Erstellen von MeaningPoint-Objekten mit sinnvollen Defaults.
-
-        Args:
-            **kwargs: Beliebige MeaningPoint-Attribute (überschreiben Defaults)
-
-        Returns:
-            Ein vollständig initialisiertes MeaningPoint-Objekt
-        """
-        try:
-            # Sinnvolle Defaults
-            defaults = {
-                "id": f"mp-{uuid.uuid4().hex[:6]}",
-                "modality": Modality.DECLARATIVE,
-                "polarity": Polarity.POSITIVE,
-                "confidence": 0.7,  # Konservativ, wird oft überschrieben
-                "arguments": {},
-                "span_offsets": [],
-                "source_rules": [],
-            }
-
-            # Kategorie-spezifische Modality
-            category = kwargs.get("category")
-            if category == MeaningPointCategory.QUESTION:
-                defaults["modality"] = Modality.INTERROGATIVE
-            elif category == MeaningPointCategory.COMMAND:
-                defaults["modality"] = Modality.IMPERATIVE
-
-            # Merge mit übergebenen Parametern
-            defaults.update(kwargs)
-
-            return MeaningPoint(**defaults)
-
-        except Exception as e:
-            logger.error(f"Fehler beim Erstellen des MeaningPoints: {e}", exc_info=True)
-            # Rethrow, da ein MeaningPoint essentiell ist
-            raise

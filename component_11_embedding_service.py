@@ -25,7 +25,9 @@ class EmbeddingService:
     Dies vermeidet redundante Berechnungen für identische Texte.
     """
 
-    def __init__(self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"):
+    def __init__(
+        self, model_name: str = "paraphrase-multilingual-MiniLM-L12-v2"
+    ) -> None:
         self.model: Optional[SentenceTransformer] = None
         self.vector_dimension: int = 0
         self._model_name: str = model_name
@@ -35,6 +37,10 @@ class EmbeddingService:
         self._embedding_cache = lru_cache(maxsize=1000)(
             self._compute_embedding_uncached
         )
+
+        # Periodic cache statistics logging
+        self._call_count: int = 0
+        self._log_interval: int = 100  # Log every 100 calls
 
         try:
             logger.info("Lade Embedding-Modell", extra={"model_name": model_name})
@@ -72,11 +78,18 @@ class EmbeddingService:
         Returns:
             Tuple von Floats (hashbar für LRU-Cache)
 
+        Raises:
+            EmbeddingError: Wenn das Modell nicht verfügbar ist
+
         Note:
             Diese Methode nimmt an, dass Validierung bereits erfolgt ist.
         """
         # Type narrowing: Nach is_available() Check ist self.model garantiert nicht None
-        assert self.model is not None, "Modell sollte verfügbar sein"
+        if self.model is None:
+            raise EmbeddingError(
+                "Modell ist nicht verfügbar für Embedding-Berechnung. "
+                "Service wurde möglicherweise nicht korrekt initialisiert."
+            )
 
         embedding = self.model.encode([text])[0]
 
@@ -125,6 +138,20 @@ class EmbeddingService:
             # Verwende gecachte Version (automatisches Caching durch LRU)
             embedding_tuple = self._embedding_cache(text)
 
+            # Increment call counter and log cache statistics periodically
+            self._call_count += 1
+            if self._call_count % self._log_interval == 0:
+                cache_stats = self.get_cache_info()
+                logger.info(
+                    "Embedding cache statistics",
+                    extra={
+                        "calls": self._call_count,
+                        "hit_rate": cache_stats["hit_rate"],
+                        "cache_size": cache_stats["currsize"],
+                        "max_size": cache_stats["maxsize"],
+                    },
+                )
+
             # Konvertiere zurück zu Liste für API-Kompatibilität
             return list(embedding_tuple)
         except Exception as e:
@@ -170,16 +197,18 @@ class EmbeddingService:
             Liste von Embedding-Vektoren (None für leere Texte)
 
         Raises:
-            ModelNotLoadedError: Wenn das Modell nicht verfügbar ist
+            EmbeddingError: Wenn das Modell nicht verfügbar ist
             ValueError: Wenn die Liste leer ist
         """
         if not self.is_available():
             raise EmbeddingError("Embedding-Modell ist nicht verfügbar.")
 
         # Type narrowing: Nach is_available() Check ist self.model garantiert nicht None
-        assert (
-            self.model is not None
-        ), "Modell sollte nach is_available() Check verfügbar sein"
+        if self.model is None:
+            raise EmbeddingError(
+                "Modell ist nicht verfügbar für Batch-Embedding-Berechnung. "
+                "Service wurde möglicherweise nicht korrekt initialisiert."
+            )
 
         if not texts:
             raise ValueError("Leere Textliste für Batch-Embedding übergeben.")

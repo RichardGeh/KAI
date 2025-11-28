@@ -71,6 +71,38 @@ class ResponseGenerationState:
         """Gibt den vollständigen generierten Text zurück."""
         return " ".join(self.text.completed_sentences)
 
+    def get_facts_by_relation(
+        self, relation_type: str, source: str = "available"
+    ) -> List[Dict[str, Any]]:
+        """
+        Get facts filtered by relation type.
+
+        Args:
+            relation_type: Type of relation to filter by (IS_A, HAS_PROPERTY, etc.)
+            source: Source list - "available" or "pending"
+
+        Returns:
+            List of matching facts
+        """
+        facts_list = (
+            self.available_facts
+            if source == "available"
+            else self.discourse.pending_facts
+        )
+        return [f for f in facts_list if f.get("relation_type") == relation_type]
+
+    def is_phase_complete(self, phase: str) -> bool:
+        """
+        Check if a processing phase is complete.
+
+        Args:
+            phase: Phase name (e.g., "content_selection", "lexicalization")
+
+        Returns:
+            True if phase is marked as finished
+        """
+        return self.constraints.get(f"{phase}_finished", False)
+
     def to_serializable_snapshot(self) -> Dict[str, Any]:
         """
         Erstellt einen serialisierbaren Snapshot des aktuellen State.

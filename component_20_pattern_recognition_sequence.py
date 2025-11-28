@@ -53,8 +53,17 @@ class SequencePredictor:
         # Nutze letztes Wort für Bigram-Prediction
         last_word = context[-1].lower()
 
-        # Hole alle Connections von diesem Wort
-        connections = self.netzwerk.get_word_connections(last_word, direction="before")
+        # Hole alle Connections von diesem Wort (NACH dem letzten Wort)
+        try:
+            connections = self.netzwerk.get_word_connections(
+                last_word, direction="after"
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to fetch word connections from Neo4j",
+                extra={"word": last_word, "error": str(e)},
+            )
+            return []
 
         if not connections:
             logger.debug(f"Keine Connections für '{last_word}' gefunden")

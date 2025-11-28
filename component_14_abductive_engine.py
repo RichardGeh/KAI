@@ -330,19 +330,26 @@ class AbductiveEngine:
         Runs reverse IS_A query: find X where (X)-[:IS_A]->(category)
         """
         if not self.netzwerk.driver:
+            logger.warning("Neo4j driver not available for _find_similar_concepts")
             return []
 
-        with self.netzwerk.driver.session(database="neo4j") as session:
-            result = session.run(
-                """
-                MATCH (w:Wort)-[:IS_A]->(cat:Konzept {text: $category})
-                RETURN w.text AS concept
-                LIMIT 10
-                """,
-                category=category,
-            )
+        try:
+            with self.netzwerk.driver.session(database="neo4j") as session:
+                result = session.run(
+                    """
+                    MATCH (w:Wort)-[:IS_A]->(cat:Konzept {text: $category})
+                    RETURN w.text AS concept
+                    LIMIT 10
+                    """,
+                    category=category,
+                )
 
-            return [record["concept"] for record in result]
+                return [record["concept"] for record in result]
+        except Exception as e:
+            logger.error(
+                f"Neo4j query failed in _find_similar_concepts for category '{category}': {e}"
+            )
+            return []
 
     def _generate_causal_chain_hypotheses(
         self, observation: str, concepts: List[str], context_facts: List[Fact]
@@ -762,17 +769,40 @@ class AbductiveEngine:
         # Ansonsten: konkrete unterschiedliche Typen = potentieller Widerspruch
         return True
 
-    def _is_subtype_of(self, subtype: str, supertype: str) -> bool:
+    def _is_subtype_of(
+        self,
+        subtype: str,
+        supertype: str,
+        visited: Optional[set] = None,
+        max_depth: int = 10,
+    ) -> bool:
         """
         Prüft ob subtype ein Untertyp von supertype ist (via IS_A Hierarchie).
 
         Args:
             subtype: Der potentielle Untertyp
             supertype: Der potentielle Obertyp
+            visited: Set von bereits besuchten Knoten (cycle detection)
+            max_depth: Maximale Rekursionstiefe
 
         Returns:
             True wenn subtype ein Untertyp von supertype ist
         """
+        if visited is None:
+            visited = set()
+
+        # Cycle detection
+        if subtype in visited:
+            logger.warning(f"Cycle detected in IS_A hierarchy at '{subtype}'")
+            return False
+
+        # Depth limit
+        if len(visited) >= max_depth:
+            logger.warning(f"Max depth {max_depth} exceeded in IS_A hierarchy")
+            return False
+
+        visited.add(subtype)
+
         # Abfrage der IS_A Hierarchie
         facts = self.netzwerk.query_graph_for_facts(subtype)
         if "IS_A" in facts:
@@ -781,7 +811,7 @@ class AbductiveEngine:
                 return True
             # Rekursiv prüfen (transitive IS_A)
             for parent in facts["IS_A"]:
-                if self._is_subtype_of(parent, supertype):
+                if self._is_subtype_of(parent, supertype, visited, max_depth):
                     return True
         return False
 
@@ -857,17 +887,36 @@ class AbductiveEngine:
         # Keine Widersprüche gefunden
         return False
 
-    def _is_location_hierarchy(self, loc1: str, loc2: str) -> bool:
+    def _is_location_hierarchy(
+        self, loc1: str, loc2: str, visited: Optional[set] = None, max_depth: int = 10
+    ) -> bool:
         """
         Prüft ob zwei Locations in einer Hierarchie stehen (z.B. Berlin in Deutschland).
 
         Args:
             loc1: Erste Location
             loc2: Zweite Location
+            visited: Set von bereits besuchten Knoten (cycle detection)
+            max_depth: Maximale Rekursionstiefe
 
         Returns:
             True wenn loc1 Teil von loc2 ist (oder umgekehrt)
         """
+        if visited is None:
+            visited = set()
+
+        # Cycle detection
+        if loc1 in visited or loc2 in visited:
+            logger.warning(f"Cycle detected in PART_OF hierarchy")
+            return False
+
+        # Depth limit
+        if len(visited) >= max_depth:
+            return False
+
+        visited.add(loc1)
+        visited.add(loc2)
+
         # Prüfe ob loc1 PART_OF loc2 ist
         facts1 = self.netzwerk.query_graph_for_facts(loc1)
         if "PART_OF" in facts1 and loc2 in facts1["PART_OF"]:
@@ -881,12 +930,12 @@ class AbductiveEngine:
         # Prüfe transitive PART_OF Beziehungen
         if "PART_OF" in facts1:
             for parent in facts1["PART_OF"]:
-                if self._is_location_hierarchy(parent, loc2):
+                if self._is_location_hierarchy(parent, loc2, visited, max_depth):
                     return True
 
         if "PART_OF" in facts2:
             for parent in facts2["PART_OF"]:
-                if self._is_location_hierarchy(parent, loc1):
+                if self._is_location_hierarchy(parent, loc1, visited, max_depth):
                     return True
 
         return False

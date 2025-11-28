@@ -12,6 +12,7 @@ PHASE 9: Neo4j Rule Repository (Woche 14)
 """
 
 import json
+import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
@@ -84,6 +85,9 @@ class KonzeptNetzwerkProductionRules:
         # Pending updates (für Batch-Processing)
         self._pending_stats_updates: Dict[str, Dict[str, Any]] = {}
         self._update_counter = 0
+
+        # FIX: Thread-Lock für Race Condition Protection (Code Review 2025-11-21, Concern 11)
+        self._update_lock = threading.Lock()
 
     def create_production_rule(
         self,
@@ -318,28 +322,32 @@ class KonzeptNetzwerkProductionRules:
             logger.error("update_production_rule_stats: Kein DB-Driver verfügbar")
             return False
 
-        # Sammle Update
-        if name not in self._pending_stats_updates:
-            self._pending_stats_updates[name] = {}
+        # FIX: Thread-safe Update mit Lock (Code Review 2025-11-21, Concern 11)
+        with self._update_lock:
+            # Sammle Update
+            if name not in self._pending_stats_updates:
+                self._pending_stats_updates[name] = {}
 
-        if application_count is not None:
-            self._pending_stats_updates[name]["application_count"] = application_count
-        if success_count is not None:
-            self._pending_stats_updates[name]["success_count"] = success_count
-        if last_applied is not None:
-            self._pending_stats_updates[name]["last_applied"] = last_applied
+            if application_count is not None:
+                self._pending_stats_updates[name][
+                    "application_count"
+                ] = application_count
+            if success_count is not None:
+                self._pending_stats_updates[name]["success_count"] = success_count
+            if last_applied is not None:
+                self._pending_stats_updates[name]["last_applied"] = last_applied
 
-        self._update_counter += 1
+            self._update_counter += 1
 
-        # Synchronisiere wenn Threshold erreicht oder force_sync
-        if force_sync or self._update_counter >= 10:
-            return self._flush_pending_stats()
+            # Synchronisiere wenn Threshold erreicht oder force_sync
+            if force_sync or self._update_counter >= 10:
+                return self._flush_pending_stats()
 
-        logger.debug(
-            f"update_production_rule_stats: Update für '{name}' gebatched "
-            f"({self._update_counter}/10)"
-        )
-        return True
+            logger.debug(
+                f"update_production_rule_stats: Update für '{name}' gebatched "
+                f"({self._update_counter}/10)"
+            )
+            return True
 
     def _flush_pending_stats(self) -> bool:
         """

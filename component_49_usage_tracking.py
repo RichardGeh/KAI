@@ -14,6 +14,8 @@ Design:
 - Performance-optimiert mit Batch-Updates
 """
 
+import threading
+from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
@@ -113,11 +115,19 @@ class UsageTrackingManager:
         """
         self.driver = driver
 
-        # In-Memory Buffer für Batch-Updates (Performance)
-        self._usage_buffer: List[Dict[str, Any]] = []
-        self._buffer_size = 50  # Flush alle 50 Operationen
+        # Bounded buffer with automatic eviction (CRITICAL FIX: Issue #3)
+        # maxlen=500 ensures bounded growth, preventing memory leaks
+        self._usage_buffer = deque(maxlen=500)  # Hard limit
+        self._buffer_size = 50  # Soft limit for batching
+        self._buffer_lock = threading.Lock()
 
-        logger.info("UsageTrackingManager initialisiert")
+        # Thread safety for Neo4j access
+        self._neo4j_lock = threading.RLock()
+
+        logger.info(
+            "UsageTrackingManager initialisiert",
+            extra={"max_buffer_size": 500, "batch_size": 50},
+        )
 
     # ==================== RELATION USAGE TRACKING ====================
 
@@ -166,53 +176,71 @@ class UsageTrackingManager:
 
             safe_relation = re.sub(r"[^a-zA-Z0-9_]", "", relation.upper())
 
-            with self.driver.session(database="neo4j") as session:
-                session.run(
-                    f"""
-                    MATCH (s:Konzept {{name: $subject}})-[r:{safe_relation}]->(o:Konzept {{name: $object}})
-                    SET r.usage_count = COALESCE(r.usage_count, 0) + 1,
-                        r.last_reinforced = datetime({{timezone: 'UTC'}}),
-                        r.context = CASE
-                            WHEN $context IS NOT NULL AND r.context IS NOT NULL
-                                AND NOT $context IN r.context
-                            THEN r.context + $context
-                            WHEN $context IS NOT NULL AND r.context IS NULL
-                            THEN [$context]
-                            ELSE r.context
-                        END
+            with self._neo4j_lock:
+                with self.driver.session(database="neo4j") as session:
+                    # Use WHERE clause with type() function
+                    session.run(
+                        """
+                        MATCH (s:Konzept {name: $subject})-[r]->(o:Konzept {name: $object})
+                        WHERE type(r) = $relation
+                        SET r.usage_count = COALESCE(r.usage_count, 0) + 1,
+                            r.last_reinforced = datetime({timezone: 'UTC'}),
+                            r.context = CASE
+                                WHEN $context IS NOT NULL AND r.context IS NOT NULL
+                                    AND NOT $context IN r.context
+                                THEN r.context + $context
+                                WHEN $context IS NOT NULL AND r.context IS NULL
+                                THEN [$context]
+                                ELSE r.context
+                            END
 
-                    // Verknüpfe mit Query Record
-                    WITH r
-                    MERGE (q:QueryRecord {{id: $query_id}})
-                    ON CREATE SET q.timestamp = datetime({{timezone: 'UTC'}})
-                    MERGE (q)-[used:USED_RELATION]->(f:Fact {{
-                        subject: $subject,
-                        relation: $relation,
-                        object: $object
-                    }})
-                    ON CREATE SET used.timestamp = datetime({{timezone: 'UTC'}})
-                    """,
-                    subject=subject.lower(),
-                    object=object_.lower(),
-                    relation=relation,
-                    query_id=query_id,
-                    context=context,
-                )
+                        // Verknüpfe mit Query Record
+                        WITH r
+                        MERGE (q:QueryRecord {id: $query_id})
+                        ON CREATE SET q.timestamp = datetime({timezone: 'UTC'})
+                        MERGE (q)-[used:USED_RELATION]->(f:Fact {
+                            subject: $subject,
+                            relation: $relation,
+                            object: $object
+                        })
+                        ON CREATE SET used.timestamp = datetime({timezone: 'UTC'})
+                        """,
+                        subject=subject.lower(),
+                        object=object_.lower(),
+                        relation=safe_relation,
+                        query_id=query_id,
+                        context=context,
+                    )
 
             logger.debug(
                 f"Relation usage tracked: {subject} -{relation}-> {object_} (query={query_id})"
             )
             return True
 
-        except Exception as e:
+        except ValueError as e:
             logger.error(
-                f"Fehler beim Tracken von Relation Usage: {e}",
+                "Validation error beim Tracken von Relation Usage",
                 exc_info=True,
                 extra={
                     "subject": subject,
                     "relation": relation,
                     "object": object_,
                     "query_id": query_id,
+                    "error_type": "ValueError",
+                },
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                "Neo4j Fehler beim Tracken von Relation Usage",
+                exc_info=True,
+                extra={
+                    "subject": subject,
+                    "relation": relation,
+                    "object": object_,
+                    "query_id": query_id,
+                    "error_type": type(e).__name__,
+                    "driver_available": self.driver is not None,
                 },
             )
             return False
@@ -269,43 +297,58 @@ class UsageTrackingManager:
             activation_level = max(0.0, min(1.0, activation_level))
 
         try:
-            with self.driver.session(database="neo4j") as session:
-                session.run(
-                    """
-                    MATCH (k:Konzept {name: $concept})
-                    SET k.usage_frequency = COALESCE(k.usage_frequency, 0) + 1,
-                        k.last_used = datetime({timezone: 'UTC'})
+            with self._neo4j_lock:
+                with self.driver.session(database="neo4j") as session:
+                    session.run(
+                        """
+                        MATCH (k:Konzept {name: $concept})
+                        SET k.usage_frequency = COALESCE(k.usage_frequency, 0) + 1,
+                            k.last_used = datetime({timezone: 'UTC'})
 
-                    // Verknüpfe mit Query Record
-                    WITH k
-                    MERGE (q:QueryRecord {id: $query_id})
-                    ON CREATE SET q.timestamp = datetime({timezone: 'UTC'})
-                    MERGE (q)-[activated:ACTIVATED_CONCEPT]->(k)
-                    ON CREATE SET activated.timestamp = datetime({timezone: 'UTC'}),
-                                  activated.activation_level = $activation_level,
-                                  activated.context = $context
-                    ON MATCH SET activated.activation_level =
-                        (activated.activation_level + $activation_level) / 2.0
-                    """,
-                    concept=concept.lower(),
-                    query_id=query_id,
-                    activation_level=activation_level,
-                    context=context,
-                )
+                        // Verknüpfe mit Query Record
+                        WITH k
+                        MERGE (q:QueryRecord {id: $query_id})
+                        ON CREATE SET q.timestamp = datetime({timezone: 'UTC'})
+                        MERGE (q)-[activated:ACTIVATED_CONCEPT]->(k)
+                        ON CREATE SET activated.timestamp = datetime({timezone: 'UTC'}),
+                                      activated.activation_level = $activation_level,
+                                      activated.context = $context
+                        ON MATCH SET activated.activation_level =
+                            (activated.activation_level + $activation_level) / 2.0
+                        """,
+                        concept=concept.lower(),
+                        query_id=query_id,
+                        activation_level=activation_level,
+                        context=context,
+                    )
 
             logger.debug(
                 f"Concept activation tracked: {concept} (level={activation_level:.2f}, query={query_id})"
             )
             return True
 
-        except Exception as e:
+        except ValueError as e:
             logger.error(
-                f"Fehler beim Tracken von Concept Activation: {e}",
+                "Validation error beim Tracken von Concept Activation",
                 exc_info=True,
                 extra={
                     "concept": concept,
                     "activation_level": activation_level,
                     "query_id": query_id,
+                    "error_type": "ValueError",
+                },
+            )
+            return False
+        except Exception as e:
+            logger.error(
+                "Neo4j Fehler beim Tracken von Concept Activation",
+                exc_info=True,
+                extra={
+                    "concept": concept,
+                    "activation_level": activation_level,
+                    "query_id": query_id,
+                    "error_type": type(e).__name__,
+                    "driver_available": self.driver is not None,
                 },
             )
             return False
@@ -622,11 +665,14 @@ class UsageTrackingManager:
 # ==================== GLOBAL INSTANCE ====================
 
 _global_usage_tracker: Optional[UsageTrackingManager] = None
+_usage_tracker_lock = threading.Lock()
 
 
 def get_usage_tracker(driver=None) -> UsageTrackingManager:
     """
     Gibt die globale UsageTrackingManager-Instanz zurück.
+
+    Thread-safe mit double-check locking pattern.
 
     Args:
         driver: Neo4j Driver (nur beim ersten Aufruf erforderlich)
@@ -639,14 +685,17 @@ def get_usage_tracker(driver=None) -> UsageTrackingManager:
     """
     global _global_usage_tracker
 
+    # Double-check locking pattern for thread safety
     if _global_usage_tracker is None:
-        if driver is None:
-            raise ValueError(
-                "Beim ersten Aufruf muss driver-Parameter übergeben werden"
-            )
+        with _usage_tracker_lock:
+            if _global_usage_tracker is None:
+                if driver is None:
+                    raise ValueError(
+                        "Beim ersten Aufruf muss driver-Parameter übergeben werden"
+                    )
 
-        _global_usage_tracker = UsageTrackingManager(driver)
-        logger.info("Globale UsageTrackingManager-Instanz erstellt")
+                _global_usage_tracker = UsageTrackingManager(driver)
+                logger.info("Globale UsageTrackingManager-Instanz erstellt")
 
     return _global_usage_tracker
 

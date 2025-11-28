@@ -40,6 +40,7 @@ from PySide6.QtWidgets import (
     QGraphicsView,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QSlider,
     QSpinBox,
@@ -48,8 +49,13 @@ from PySide6.QtWidgets import (
 )
 
 from component_15_logging_config import get_logger
+from kai_exceptions import KAIException
 
 logger = get_logger(__name__)
+
+
+class FileSystemError(KAIException):
+    """Exception für Dateisystem-Operationen im SpatialGridWidget."""
 
 
 # ==================== Data Structures ====================
@@ -397,14 +403,32 @@ class SpatialGridWidget(QWidget):
         logger.info(f"Path displayed with {len(path)} steps (animate={animate})")
 
     def clear_grid(self):
-        """Clear the grid."""
+        """
+        Clear the grid and free all resources.
+
+        Properly removes all QGraphicsItems to prevent memory leaks.
+        """
+        # Step 1: Explicitly remove all items from scene
+        for item in list(self.scene.items()):
+            # Break parent-child relationships
+            item.setParentItem(None)
+            # Remove from scene
+            self.scene.removeItem(item)
+
+        # Step 2: Clear scene (belt and suspenders)
         self.scene.clear()
+
+        # Step 3: Clear cell items dictionary
         self.cell_items.clear()
+
+        # Step 4: Clear grid data
         self.grid_data = None
+
+        # Step 5: Reset UI
         self.title_label.setText("Räumliches Grid")
         self.info_label.setText("Kein Grid geladen")
 
-        logger.debug("Grid cleared")
+        logger.debug("Grid cleared (all items removed, memory freed)")
 
     def _on_zoom_changed(self, value: int):
         """Handle zoom slider changes."""
@@ -425,9 +449,19 @@ class SpatialGridWidget(QWidget):
             self._render_grid()
 
     def _export_to_image(self):
-        """Export the grid to an image file."""
+        """
+        Export the grid to an image file.
+
+        Raises:
+            FileSystemError: Wenn Export fehlschlägt
+        """
         if not self.grid_data:
             logger.warning("No grid to export")
+            QMessageBox.warning(
+                self,
+                "Export fehlgeschlagen",
+                "Kein Grid vorhanden zum Exportieren.",
+            )
             return
 
         filename, _ = QFileDialog.getSaveFileName(
@@ -438,16 +472,44 @@ class SpatialGridWidget(QWidget):
         )
 
         if filename:
-            # Create pixmap from scene
-            pixmap = QPixmap(self.scene.sceneRect().size().toSize())
-            pixmap.fill(Qt.GlobalColor.white)
+            try:
+                # Create pixmap from scene
+                pixmap = QPixmap(self.scene.sceneRect().size().toSize())
+                pixmap.fill(Qt.GlobalColor.white)
 
-            painter = QPainter(pixmap)
-            self.scene.render(painter)
-            painter.end()
+                painter = QPainter(pixmap)
+                self.scene.render(painter)
+                painter.end()
 
-            pixmap.save(filename)
-            logger.info(f"Grid exported to {filename}")
+                # Save to file
+                success = pixmap.save(filename)
+                if not success:
+                    raise FileSystemError(
+                        "Pixmap konnte nicht gespeichert werden",
+                        context={"filename": filename},
+                    )
+
+                logger.info(f"Grid exported to {filename}")
+                QMessageBox.information(
+                    self,
+                    "Export erfolgreich",
+                    f"Grid wurde erfolgreich exportiert:\n{filename}",
+                )
+
+            except FileSystemError as e:
+                logger.error(f"Export fehlgeschlagen: {e}")
+                QMessageBox.critical(
+                    self,
+                    "Export fehlgeschlagen",
+                    f"Fehler beim Speichern der Datei:\n{e.message}\n\nPfad: {filename}",
+                )
+            except Exception as e:
+                logger.error(f"Unerwarteter Fehler beim Export: {e}", exc_info=True)
+                QMessageBox.critical(
+                    self,
+                    "Export fehlgeschlagen",
+                    f"Unerwarteter Fehler:\n{type(e).__name__}: {str(e)}\n\nPfad: {filename}",
+                )
 
 
 # ==================== Utility Functions ====================

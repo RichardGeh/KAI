@@ -1,8 +1,35 @@
 # component_5_linguistik_strukturen.py
+# WICHTIG: Keine Unicode-Zeichen verwenden, die Windows cp1252 Encoding-Probleme verursachen
+# Verboten: ✓ ✗ → × ÷ ≠ ≤ ≥ ∧ ∨ ¬ π √ und ähnliche Sonderzeichen (siehe CLAUDE.md)
+# Stattdessen verwenden: [OK] [FEHLER] -> * / != <= >= AND OR NOT
 import uuid
+import warnings
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
+
+# --- Helper Functions for ID Generation ---
+
+
+def _generate_subgoal_id() -> str:
+    """Generiert eine eindeutige ID für SubGoals."""
+    return f"sg-{uuid.uuid4().hex[:8]}"
+
+
+def _generate_maingoal_id() -> str:
+    """Generiert eine eindeutige ID für MainGoals."""
+    return f"mg-{uuid.uuid4().hex[:8]}"
+
+
+def _generate_timestamp() -> str:
+    """Generiert einen Zeitstempel als UUID."""
+    return str(uuid.uuid4())
+
+
+def _generate_context_snapshot_id() -> str:
+    """Generiert eine eindeutige ID für Context-Snapshots."""
+    return f"ctx-{uuid.uuid4().hex[:8]}"
+
 
 # --- Enums für feste Kategorien ---
 
@@ -39,11 +66,25 @@ class Polarity(Enum):
 
 
 class Priority(Enum):
-    """Veraltet, Priorität wird durch die Reihenfolge der SubGoals im Plan abgebildet."""
+    """
+    Veraltet, Priorität wird durch die Reihenfolge der SubGoals im Plan abgebildet.
+
+    Deprecated: Diese Klasse wird in einer zukünftigen Version entfernt.
+    Verwenden Sie stattdessen die Reihenfolge der SubGoals im MainGoal.
+    """
 
     MUST = "Must"
     SHOULD = "Should"
     COULD = "Could"
+
+    def __init__(self, value):
+        warnings.warn(
+            "Priority ist veraltet und wird in einer zukünftigen Version entfernt. "
+            "Verwenden Sie stattdessen die Reihenfolge der SubGoals im MainGoal.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        self._value_ = value
 
 
 # --- Goal Type Enum (muss vor Goal-Klasse definiert sein) ---
@@ -85,7 +126,12 @@ class MeaningPoint:
 
 @dataclass
 class Goal:
-    """Veraltet, wird durch MainGoal und SubGoal ersetzt."""
+    """
+    Veraltet, wird durch MainGoal und SubGoal ersetzt.
+
+    Deprecated: Diese Klasse wird in einer zukünftigen Version entfernt.
+    Verwenden Sie stattdessen MainGoal und SubGoal aus der neuen Planungs-Architektur.
+    """
 
     id: str
     type: GoalType
@@ -99,6 +145,15 @@ class Goal:
     dependencies: List[str] = field(default_factory=list)  # IDs anderer Goals
     constraints: List[str] = field(default_factory=list)
     trace_rules: List[str] = field(default_factory=list)
+
+    def __post_init__(self):
+        """Emittiert eine Deprecation Warning bei Instanziierung."""
+        warnings.warn(
+            "Goal ist veraltet und wird in einer zukünftigen Version entfernt. "
+            "Verwenden Sie stattdessen MainGoal und SubGoal.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
 
 @dataclass
@@ -139,7 +194,7 @@ class SubGoal:
     """Repräsentiert einen einzelnen, atomaren Schritt in einem Ausführungsplan."""
 
     description: str
-    id: str = field(default_factory=lambda: f"sg-{uuid.uuid4().hex[:8]}")
+    id: str = field(default_factory=_generate_subgoal_id)
     status: GoalStatus = GoalStatus.PENDING
     result: Optional[Dict[str, Any]] = None
     error_message: Optional[str] = None
@@ -154,7 +209,7 @@ class MainGoal:
 
     type: GoalType
     description: str
-    id: str = field(default_factory=lambda: f"mg-{uuid.uuid4().hex[:8]}")
+    id: str = field(default_factory=_generate_maingoal_id)
     status: GoalStatus = GoalStatus.PENDING
     sub_goals: List[SubGoal] = field(default_factory=list)
 
@@ -201,7 +256,7 @@ class ContextSnapshot:
     plan_zur_ausfuehrung: Optional[MainGoal] = None
     original_intent: Optional[MeaningPoint] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
-    timestamp: str = field(default_factory=lambda: str(uuid.uuid4()))
+    timestamp: str = field(default_factory=_generate_timestamp)
     entities: List[str] = field(default_factory=list)
     parent_snapshot_id: Optional[str] = None
 
@@ -266,7 +321,7 @@ class KaiContext:
         Returns:
             Die ID des erstellten Snapshots
         """
-        snapshot_id = f"ctx-{uuid.uuid4().hex[:8]}"
+        snapshot_id = _generate_context_snapshot_id()
         parent_id = self.history[-1].snapshot_id if self.history else None
 
         snapshot = ContextSnapshot(
@@ -292,22 +347,37 @@ class KaiContext:
         """
         PHASE 2: Stellt einen früheren Kontext-Zustand wieder her.
 
+        Implementiert Rollback-Safety: Der aktuelle Zustand wird NUR überschrieben,
+        wenn der Snapshot existiert und gültig ist.
+
         Args:
             snapshot_id: ID des wiederherzustellenden Snapshots
 
         Returns:
             True wenn erfolgreich, False wenn Snapshot nicht gefunden
         """
+        # 1. Finde Snapshot ZUERST (ohne State zu ändern)
+        target_snapshot = None
         for snapshot in reversed(self.history):
             if snapshot.snapshot_id == snapshot_id:
-                self.aktion = snapshot.aktion
-                self.thema = snapshot.thema
-                self.plan_zur_ausfuehrung = snapshot.plan_zur_ausfuehrung
-                self.original_intent = snapshot.original_intent
-                self.metadata = snapshot.metadata.copy()
-                self.entities_in_session = snapshot.entities.copy()
-                return True
-        return False
+                target_snapshot = snapshot
+                break
+
+        if not target_snapshot:
+            return False  # Keine Änderungen bei Fehler
+
+        # 2. Speichere aktuellen Zustand VOR dem Restore (nur wenn aktiv)
+        if self.is_active():
+            self.save_snapshot()
+
+        # 3. Restore durchführen (nur wenn Snapshot gefunden wurde)
+        self.aktion = target_snapshot.aktion
+        self.thema = target_snapshot.thema
+        self.plan_zur_ausfuehrung = target_snapshot.plan_zur_ausfuehrung
+        self.original_intent = target_snapshot.original_intent
+        self.metadata = target_snapshot.metadata.copy()
+        self.entities_in_session = target_snapshot.entities.copy()
+        return True
 
     def get_last_snapshot(self) -> Optional[ContextSnapshot]:
         """PHASE 2: Holt den letzten Snapshot aus der History."""
@@ -351,6 +421,7 @@ class KaiContext:
                 ContextAction.ERWARTE_BESTAETIGUNG: "Erwarte Bestätigung",
                 ContextAction.ERWARTE_FEEDBACK_ZU_CLARIFICATION: "Erwarte Feedback",
                 ContextAction.ERWARTE_TYPO_KLARSTELLUNG: "Erwarte Tippfehler-Korrektur",
+                ContextAction.ERWARTE_BEFEHL_BESTAETIGUNG: "Erwarte Befehlsbestätigung",
             }
             parts.append(action_desc.get(self.aktion, self.aktion.value))
 
@@ -364,8 +435,8 @@ class KaiContext:
 
     def clear(self) -> None:
         """Setzt den Kontext zurück auf Standardwerte (behält History)."""
-        # Speichere Snapshot vor dem Löschen
-        if self.is_active():
+        # Speichere Snapshot vor dem Löschen (wenn irgendwelche Daten gesetzt sind)
+        if self.is_active() or self.thema or self.metadata or self.entities_in_session:
             self.save_snapshot()
 
         self.aktion = ContextAction.NONE

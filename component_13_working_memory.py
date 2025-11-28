@@ -41,7 +41,11 @@ class ReasoningState:
     description: str
     data: Dict[str, Any] = field(default_factory=dict)
     confidence: float = 1.0
-    timestamp: datetime = field(default_factory=datetime.now)
+    timestamp: Optional[datetime] = None
+
+    def __post_init__(self):
+        if self.timestamp is None:
+            self.timestamp = datetime.now()
 
     def to_dict(self) -> Dict[str, Any]:
         """Konvertiere zu Dictionary für Serialisierung"""
@@ -70,9 +74,16 @@ class ContextFrame:
     reasoning_states: List[ReasoningState] = field(default_factory=list)
     variables: Dict[str, Any] = field(default_factory=dict)
     metadata: Dict[str, Any] = field(default_factory=dict)
-    created_at: datetime = field(default_factory=datetime.now)
-    last_access_time: datetime = field(default_factory=datetime.now)
+    created_at: Optional[datetime] = None
+    last_access_time: Optional[datetime] = None
     parent_frame_id: Optional[str] = None
+
+    def __post_init__(self):
+        now = datetime.now()
+        if self.created_at is None:
+            self.created_at = now
+        if self.last_access_time is None:
+            self.last_access_time = now
 
     def add_reasoning_state(self, state: ReasoningState):
         """Füge einen Reasoning-Schritt hinzu"""
@@ -429,6 +440,10 @@ class WorkingMemory:
         Returns:
             Liste der entfernten Frame-IDs
         """
+        from component_15_logging_config import get_logger
+
+        logger = get_logger(__name__)
+
         if not self.context_stack:
             return []
 
@@ -438,10 +453,17 @@ class WorkingMemory:
         idle_frames = self.get_idle_frames(timeout_seconds)
 
         if not idle_frames:
+            logger.debug("No idle frames to clean")
             return []
+
+        # Log idle frames gefunden
+        logger.info(
+            f"Found {len(idle_frames)} idle frames (timeout={timeout_seconds}s)"
+        )
 
         # Wenn preserve_root=True, entferne Root-Frame aus Kandidaten
         if preserve_root and self.context_stack[0] in idle_frames:
+            logger.debug("Preserving root frame despite idle status")
             idle_frames.remove(self.context_stack[0])
 
         # Entferne Frames bottom-up (tiefster zuerst)
@@ -461,6 +483,12 @@ class WorkingMemory:
                 self.context_stack = self.context_stack[:frame_index]
 
                 removed_ids.extend([f.frame_id for f in removed])
+
+        # Log Cleanup-Ergebnis
+        if removed_ids:
+            logger.warning(
+                f"Cleaned up {len(removed_ids)} idle contexts: {removed_ids}"
+            )
 
         return removed_ids
 
@@ -713,7 +741,45 @@ class WorkingMemory:
                 print("Fehler: JSON-Datei hat keine 'frames'-Struktur")
                 return False
 
-            # Leere aktuellen Stack
+            # ==================== PRE-VALIDATION PASS ====================
+            # Validiere alle Frames BEVOR wir den Stack leeren
+            seen_frame_ids = set()
+            for frame_dict in import_data["frames"]:
+                # Validiere frame_id format
+                frame_id = frame_dict.get("frame_id", "")
+                if not frame_id or not isinstance(frame_id, str):
+                    print(f"Fehler: Invalide frame_id: {frame_id}")
+                    return False
+
+                if frame_id in seen_frame_ids:
+                    print(f"Fehler: Doppelte frame_id: {frame_id}")
+                    return False
+                seen_frame_ids.add(frame_id)
+
+                # Validiere ContextType
+                try:
+                    ContextType(frame_dict["context_type"])
+                except (KeyError, ValueError) as e:
+                    print(f"Fehler: Invalider context_type: {e}")
+                    return False
+
+                # Validiere datetime formats
+                for date_field in ["created_at", "last_access_time"]:
+                    if date_field in frame_dict:
+                        try:
+                            datetime.fromisoformat(frame_dict[date_field])
+                        except ValueError as e:
+                            print(f"Fehler: Invalides {date_field} Format: {e}")
+                            return False
+
+            # Validiere parent_frame_id Referenzen
+            for frame_dict in import_data["frames"]:
+                parent_id = frame_dict.get("parent_frame_id")
+                if parent_id and parent_id not in seen_frame_ids:
+                    print(f"Fehler: Invalide parent_frame_id Referenz: {parent_id}")
+                    return False
+
+            # Leere aktuellen Stack (erst nach erfolgreicher Validierung)
             self.clear()
 
             # Importiere Frames

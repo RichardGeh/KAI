@@ -4,7 +4,7 @@ component_38_elimination_reasoning.py
 Generic Elimination & Deductive Reasoning Engine
 
 Implementiert allgemeingültige Eliminationslogik für Multi-Agent-Puzzles:
-- Statement-Based Elimination (Agent sagt X → eliminiere inkonsistente Möglichkeiten)
+- Statement-Based Elimination (Agent sagt X -> eliminiere inkonsistente Moeglichkeiten)
 - Deductive Chains (mehrere Elimination-Schritte kombinieren)
 - Meta-Knowledge Elimination (Higher-Order Reasoning)
 - Iterative Refinement (Fixed-Point Elimination)
@@ -62,8 +62,8 @@ class AgentStatement:
     Generic statement made by an agent during reasoning.
 
     Examples:
-    - "Albert: I know Bernard doesn't know" → (albert, I_KNOW_OTHER_DOESNT_KNOW, bernard)
-    - "Bernard: Now I know" → (bernard, NOW_I_KNOW, None)
+    - "Albert: I know Bernard doesn't know" -> (albert, I_KNOW_OTHER_DOESNT_KNOW, bernard)
+    - "Bernard: Now I know" -> (bernard, NOW_I_KNOW, None)
     """
 
     speaker: str
@@ -154,7 +154,7 @@ class DeductiveStep:
     """
     Single step in deductive reasoning chain.
 
-    Tracks: statement → elimination → new candidates → new knowledge
+    Tracks: statement -> elimination -> new candidates -> new knowledge
     """
 
     turn: int
@@ -201,7 +201,7 @@ class DeductiveChain:
         self.steps.append(step)
 
         logger.debug(
-            f"Deductive step added: {len(candidates_before)} → {len(self.current_candidates)}",
+            f"Deductive step added: {len(candidates_before)} -> {len(self.current_candidates)}",
             extra={
                 "turn": statement.turn,
                 "speaker": statement.speaker,
@@ -371,7 +371,7 @@ class EliminationReasoner:
         These rules work for ANY partial observation puzzle.
         """
 
-        # Rule 1: "I know" → eliminate non-unique observations
+        # Rule 1: "I know" -> eliminate non-unique observations
         def filter_i_know(
             obj: WorldObject, stmt: AgentStatement, ctx: EliminationContext
         ) -> bool:
@@ -383,12 +383,12 @@ class EliminationReasoner:
                 name="eliminate_non_unique_for_i_know",
                 statement_type=StatementType.I_KNOW,
                 filter_predicate=filter_i_know,
-                explanation_template="{speaker} sagt 'Ich weiß es' → eliminiere {eliminated_count} nicht-eindeutige Objekte",
+                explanation_template="{speaker} sagt 'Ich weiss es' -> eliminiere {eliminated_count} nicht-eindeutige Objekte",
                 priority=10,
             )
         )
 
-        # Rule 2: "Now I know" → eliminate non-unique after update
+        # Rule 2: "Now I know" -> eliminate non-unique after update
         def filter_now_i_know(
             obj: WorldObject, stmt: AgentStatement, ctx: EliminationContext
         ) -> bool:
@@ -400,12 +400,12 @@ class EliminationReasoner:
                 name="eliminate_non_unique_for_now_i_know",
                 statement_type=StatementType.NOW_I_KNOW,
                 filter_predicate=filter_now_i_know,
-                explanation_template="{speaker} sagt 'Jetzt weiß ich es' → eliminiere {eliminated_count} Objekte",
+                explanation_template="{speaker} sagt 'Jetzt weiss ich es' -> eliminiere {eliminated_count} Objekte",
                 priority=10,
             )
         )
 
-        # Rule 3: "I know other doesn't know" → eliminate partitions with unique identifiers
+        # Rule 3: "I know other doesn't know" -> eliminate partitions with unique identifiers
         def filter_i_know_other_doesnt(
             obj: WorldObject, stmt: AgentStatement, ctx: EliminationContext
         ) -> bool:
@@ -445,7 +445,7 @@ class EliminationReasoner:
                 ]
 
                 if len(matching_for_other) == 1:
-                    # Other COULD identify this object → speaker CANNOT know other doesn't know
+                    # Other COULD identify this object -> speaker CANNOT know other doesn't know
                     return False
 
             # For ALL objects with speaker's observation, other cannot uniquely identify
@@ -456,7 +456,7 @@ class EliminationReasoner:
                 name="eliminate_partitions_with_unique_identifier",
                 statement_type=StatementType.I_KNOW_OTHER_DOESNT_KNOW,
                 filter_predicate=filter_i_know_other_doesnt,
-                explanation_template="{speaker} sagt 'Ich weiß, dass {about_agent} es nicht weiß' → eliminiere {eliminated_count} Partitionen",
+                explanation_template="{speaker} sagt 'Ich weiss, dass {about_agent} es nicht weiss' -> eliminiere {eliminated_count} Partitionen",
                 priority=9,
             )
         )
@@ -621,4 +621,4 @@ if __name__ == "__main__":
     print(f"Solution: {solution.object_id if solution else 'None'}")
     print(f"Proof tree steps: {len(proof_tree.root_steps)}")
 
-    print("\n✓ Test complete!")
+    print("\n[OK] Test complete!")

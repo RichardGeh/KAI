@@ -12,6 +12,15 @@ from component_15_logging_config import get_logger
 
 logger = get_logger(__name__)
 
+# Confidence Thresholds (FIX 2024-11: Gesenkt um zu häufige Bestätigungen zu vermeiden)
+CLARIFICATION_THRESHOLD = 0.3  # Below this: ask for clarification
+CONFIRMATION_THRESHOLD_DEFAULT = 0.7  # Below this: request confirmation
+CONFIRMATION_THRESHOLD_AUTO_DETECT = 0.75  # For auto-detected definitions
+
+# String truncation limits for logging
+TEXT_PREVIEW_SHORT = 30
+TEXT_PREVIEW_MEDIUM = 50
+
 
 class GoalPlanner:
     """
@@ -59,22 +68,20 @@ class GoalPlanner:
                 logger.info("UNKNOWN category detected -> Clarification Plan")
                 return self._plan_for_clarification(meaning_point)
 
-            # GATE 1: Low confidence (< 0.3) -> Ask for clarification
-            # FIX 2024-11: Gesenkt von 0.4 auf 0.3 um weniger oft nach Klärung zu fragen
-            if confidence < 0.3:
+            # GATE 1: Low confidence -> Ask for clarification
+            if confidence < CLARIFICATION_THRESHOLD:
                 logger.info(f"Low confidence ({confidence:.2f}) -> Clarification Plan")
                 return self._plan_for_clarification(meaning_point)
 
-            # GATE 2: Medium confidence (< 0.75 for auto-detected definitions, < 0.7 for others) -> Request confirmation
+            # GATE 2: Medium confidence -> Request confirmation
             # PHASE 3 (Schritt 3): Spezialbehandlung für auto-erkannte Definitionen
-            # FIX 2024-11: Schwellenwerte gesenkt (0.85->0.75, 0.8->0.7) um weniger Bestätigungen zu verlangen
             confirmation_threshold = (
-                0.75
+                CONFIRMATION_THRESHOLD_AUTO_DETECT
                 if (
                     category == MeaningPointCategory.DEFINITION
                     and meaning_point.arguments.get("auto_detected")
                 )
-                else 0.7
+                else CONFIRMATION_THRESHOLD_DEFAULT
             )
 
             if confidence < confirmation_threshold:
@@ -96,7 +103,13 @@ class GoalPlanner:
             return self._get_base_plan(category, command, meaning_point)
 
         except Exception as e:
-            logger.error(f"Error in create_plan: {e}", exc_info=True)
+            logger.error(
+                f"Error in create_plan: {e} | "
+                f"category={category.name if category else 'None'}, "
+                f"confidence={confidence:.2f}, "
+                f"command={command}",
+                exc_info=True,
+            )
             return None
 
     def _get_base_plan(
@@ -192,7 +205,7 @@ class GoalPlanner:
         Returns:
             MainGoal mit ANSWER_QUESTION type
         """
-        mp.arguments.get("episodic_query_type", "show_episodes")
+        # Note: episodic_query_type could be used for specialized handling in future
         topic = mp.arguments.get("topic")
 
         topic_desc = f" über '{topic}'" if topic else ""
@@ -231,40 +244,36 @@ class GoalPlanner:
             description=f"Beantworte räumliche Abfrage: '{mp.text_span}'",
         )
 
-        # Erstelle Sub-Goals abhängig vom Query-Typ
-        if spatial_query_type == "grid_query":
-            plan.sub_goals = [
-                SubGoal(description="Extrahiere räumliche Entitäten und Positionen."),
-                SubGoal(description="Erstelle räumliches Modell (Grid)."),
-                SubGoal(description="Formuliere räumliche Antwort."),
-            ]
-        elif spatial_query_type == "position_query":
-            plan.sub_goals = [
-                SubGoal(description="Extrahiere räumliche Entitäten und Positionen."),
-                SubGoal(description="Erstelle räumliches Modell (Positionen)."),
-                SubGoal(description="Formuliere räumliche Antwort."),
-            ]
-        elif spatial_query_type == "relation_query":
-            plan.sub_goals = [
-                SubGoal(description="Extrahiere räumliche Entitäten und Positionen."),
+        # Gemeinsame Base-Goals für alle Spatial Queries
+        base_goals = [
+            SubGoal(description="Extrahiere räumliche Entitäten und Positionen."),
+        ]
+
+        # Spezifische Mid-Goals basierend auf Query-Typ
+        mid_goals_map = {
+            "grid_query": [SubGoal(description="Erstelle räumliches Modell (Grid).")],
+            "position_query": [
+                SubGoal(description="Erstelle räumliches Modell (Positionen).")
+            ],
+            "relation_query": [
                 SubGoal(description="Erstelle räumliches Modell (Relationen)."),
                 SubGoal(description="Löse räumliche Constraints."),
-                SubGoal(description="Formuliere räumliche Antwort."),
-            ]
-        elif spatial_query_type == "path_finding":
-            plan.sub_goals = [
-                SubGoal(description="Extrahiere räumliche Entitäten und Positionen."),
+            ],
+            "path_finding": [
                 SubGoal(description="Erstelle räumliches Modell (Path-Finding)."),
                 SubGoal(description="Plane räumliche Aktionen."),
-                SubGoal(description="Formuliere räumliche Antwort."),
-            ]
-        else:
-            # Fallback: Generischer Plan
-            plan.sub_goals = [
-                SubGoal(description="Extrahiere räumliche Entitäten und Positionen."),
-                SubGoal(description="Erstelle räumliches Modell."),
-                SubGoal(description="Formuliere räumliche Antwort."),
-            ]
+            ],
+        }
+
+        # Gemeinsames Final-Goal für alle Queries
+        final_goal = SubGoal(description="Formuliere räumliche Antwort.")
+
+        # Kombiniere Goals
+        mid_goals = mid_goals_map.get(
+            spatial_query_type,
+            [SubGoal(description="Erstelle räumliches Modell.")],  # Fallback
+        )
+        plan.sub_goals = base_goals + mid_goals + [final_goal]
 
         logger.debug(
             f"Plan für räumliche Abfrage erstellt: {spatial_query_type}, "
@@ -337,9 +346,10 @@ class GoalPlanner:
     def _plan_for_ingestion(self, mp: MeaningPoint) -> MainGoal:
         # ... (diese Methode bleibt unverändert)
         """Erstellt einen Plan zur Verarbeitung von unstrukturiertem Text."""
+        text_preview = mp.arguments.get("text_to_ingest", "")[:TEXT_PREVIEW_SHORT]
         plan = MainGoal(
             type=GoalType.PERFORM_TASK,
-            description=f"Ingestiere Text: '{mp.arguments.get('text_to_ingest')[:30]}...'",
+            description=f"Ingestiere Text: '{text_preview}...'",
         )
         plan.sub_goals = [
             SubGoal(description="Extrahiere den zu ingestierenden Text."),
@@ -351,9 +361,10 @@ class GoalPlanner:
     def _plan_for_simple_learning(self, mp: MeaningPoint) -> MainGoal:
         """Erstellt einen Plan für einfaches Lernen mit 'Lerne: <text>' Befehl."""
         text_to_learn = mp.arguments.get("text_to_learn", "")
+        text_preview = text_to_learn[:TEXT_PREVIEW_SHORT]
         plan = MainGoal(
             type=GoalType.LEARN_KNOWLEDGE,
-            description=f"Lerne: '{text_to_learn[:30]}...'",
+            description=f"Lerne: '{text_preview}...'",
         )
         plan.sub_goals = [
             SubGoal(description="Analysiere den zu lernenden Text."),
@@ -375,9 +386,15 @@ class GoalPlanner:
             mp: MeaningPoint mit file_path in arguments
 
         Returns:
-            MainGoal mit READ_DOCUMENT type
+            MainGoal mit READ_DOCUMENT type or CLARIFY_INTENT if file_path is invalid
         """
         file_path = mp.arguments.get("file_path", "")
+
+        # Validate file_path
+        if not file_path or not file_path.strip():
+            logger.warning("Datei-Ingestion ohne gültigen Pfad angefordert")
+            return self._plan_for_clarification(mp)
+
         plan = MainGoal(
             type=GoalType.READ_DOCUMENT,
             description=f"Lese und verarbeite Datei: '{file_path}'",
@@ -439,7 +456,7 @@ class GoalPlanner:
         Erstellt einen Plan für niedrige Confidence oder UNKNOWN category.
         Fragt den Nutzer nach Klarstellung.
 
-        Phase 2: Neue Methode für Confidence Gate 1 (< 0.4)
+        Phase 2: Confidence Gate 1 (< 0.3)
 
         Args:
             mp: Der MeaningPoint mit niedriger Confidence oder UNKNOWN
@@ -453,13 +470,15 @@ class GoalPlanner:
 
         plan = MainGoal(
             type=GoalType.CLARIFY_INTENT,
-            description=f"Kläre die Absicht: '{original_text[:50]}...'",
+            description=f"Kläre die Absicht: '{original_text[:TEXT_PREVIEW_MEDIUM]}...'",
         )
         plan.sub_goals = [
             SubGoal(description="Formuliere eine allgemeine Rückfrage zur Klärung."),
         ]
 
-        logger.debug(f"Created clarification plan for input: '{original_text[:30]}...'")
+        logger.debug(
+            f"Created clarification plan for input: '{original_text[:TEXT_PREVIEW_SHORT]}...'"
+        )
         return plan
 
     def _plan_for_confirmation(self, base_plan: MainGoal, mp: MeaningPoint) -> MainGoal:
@@ -467,7 +486,7 @@ class GoalPlanner:
         Modifiziert einen existierenden Plan, um eine Bestätigung anzufordern.
         Fügt ein Confirmation-SubGoal am Anfang hinzu.
 
-        Phase 2: Neue Methode für Confidence Gate 2 (0.4 <= conf < 0.8)
+        Phase 2: Confidence Gate 2 (0.3 <= conf < 0.7/0.75)
 
         Args:
             base_plan: Der ursprüngliche Plan für die erkannte Absicht

@@ -71,7 +71,8 @@ dmypy.json
 .pytype/
 .ruff_cache/
 
-# Claude Code (personal settings)
+# Claude Code
+# Ignore all Claude Code configuration and documentation
 .claude/
 CLAUDE.md
 

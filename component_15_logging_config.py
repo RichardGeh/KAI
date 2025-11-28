@@ -24,6 +24,7 @@ import logging
 import logging.handlers
 import os
 import sys
+import threading
 import traceback
 from datetime import datetime
 from pathlib import Path
@@ -45,6 +46,9 @@ PERFORMANCE_LOG_FILE: Path = LOG_DIR / "kai_performance.log"
 DEFAULT_LOG_LEVEL: int = logging.INFO
 CONSOLE_LOG_LEVEL: int = logging.INFO
 FILE_LOG_LEVEL: int = logging.DEBUG
+
+# Thread-safety lock for setup_logging()
+_setup_lock = threading.Lock()
 
 
 class KAILogFormatter(logging.Formatter):
@@ -258,11 +262,17 @@ class StructuredLogger(logging.LoggerAdapter[logging.Logger]):
     def log_exception(self, exc: Exception, message: str = "", **context: Any) -> None:
         """
         Loggt eine Exception mit vollständigem Traceback und Kontext.
+        Sanitizes message and exception strings to prevent log injection attacks.
         """
+        # Sanitize message and exception string to prevent log injection
+        safe_message = message.replace("\n", "\\n").replace("\r", "\\r")
+        safe_exc_str = str(exc).replace("\n", "\\n").replace("\r", "\\r")
+
         tb_str = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__))
 
         self.error(
-            f"{message}: {type(exc).__name__}: {str(exc)}\n{tb_str}", extra=context
+            f"{safe_message}: {type(exc).__name__}: {safe_exc_str}\n{tb_str}",
+            extra=context,
         )
 
 
@@ -281,66 +291,99 @@ def setup_logging(
         log_file: Pfad zur Haupt-Log-Datei (Standard: logs/kai.log)
         enable_performance_logging: Aktiviert separates Performance-Logging
     """
+    # Thread-safe setup to prevent race conditions
+    with _setup_lock:
+        # Root-Logger konfigurieren
+        root_logger = logging.getLogger()
+        root_logger.setLevel(logging.DEBUG)  # Capture alles, Filter auf Handler-Ebene
 
-    # Root-Logger konfigurieren
-    root_logger = logging.getLogger()
-    root_logger.setLevel(logging.DEBUG)  # Capture alles, Filter auf Handler-Ebene
+        # Entferne existierende Handler (verhindert Duplikate bei mehrfachem Setup)
+        root_logger.handlers.clear()
 
-    # Entferne existierende Handler (verhindert Duplikate bei mehrfachem Setup)
-    root_logger.handlers.clear()
-
-    # === Konsolen-Handler ===
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(console_level)
-    console_handler.setFormatter(KAILogFormatter(use_colors=True, include_extra=True))
-    root_logger.addHandler(console_handler)
-
-    # === Haupt-Log-Datei ===
-    file_path = log_file or DEFAULT_LOG_FILE
-    file_handler = WindowsSafeRotatingFileHandler(
-        file_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"  # 10 MB
-    )
-    file_handler.setLevel(file_level)
-    file_handler.setFormatter(KAILogFormatter(use_colors=False, include_extra=True))
-    root_logger.addHandler(file_handler)
-
-    # === Error-Only Log-Datei ===
-    error_handler = WindowsSafeRotatingFileHandler(
-        ERROR_LOG_FILE,
-        maxBytes=5 * 1024 * 1024,  # 5 MB
-        backupCount=3,
-        encoding="utf-8",
-    )
-    error_handler.setLevel(logging.ERROR)
-    error_handler.setFormatter(KAILogFormatter(use_colors=False, include_extra=True))
-    root_logger.addHandler(error_handler)
-
-    # === Performance-Logger ===
-    if enable_performance_logging:
-        perf_logger = logging.getLogger("kai.performance")
-        perf_logger.setLevel(logging.INFO)
-        perf_logger.propagate = False  # Verhindere Duplikate im Root-Logger
-
-        perf_handler = WindowsSafeRotatingFileHandler(
-            PERFORMANCE_LOG_FILE,
-            maxBytes=5 * 1024 * 1024,  # 5 MB
-            backupCount=3,
-            encoding="utf-8",
+        # === Konsolen-Handler ===
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_handler.setLevel(console_level)
+        console_handler.setFormatter(
+            KAILogFormatter(use_colors=True, include_extra=True)
         )
-        perf_handler.setFormatter(KAILogFormatter(use_colors=False, include_extra=True))
-        perf_logger.addHandler(perf_handler)
+        root_logger.addHandler(console_handler)
 
-    # Initialisierungs-Log
-    logger = logging.getLogger("kai.logging_config")
-    logger.info(
-        "Logging-System initialisiert",
-        extra={
-            "console_level": logging.getLevelName(console_level),
-            "file_level": logging.getLevelName(file_level),
-            "log_file": str(file_path),
-            "performance_logging": enable_performance_logging,
-        },
-    )
+        # === Haupt-Log-Datei ===
+        file_path = log_file or DEFAULT_LOG_FILE
+        try:
+            file_handler = WindowsSafeRotatingFileHandler(
+                file_path,
+                maxBytes=10 * 1024 * 1024,
+                backupCount=5,
+                encoding="utf-8",  # 10 MB
+            )
+            file_handler.setLevel(file_level)
+            file_handler.setFormatter(
+                KAILogFormatter(use_colors=False, include_extra=True)
+            )
+            root_logger.addHandler(file_handler)
+        except (OSError, PermissionError) as e:
+            print(
+                f"WARNING: Could not create file handler for {file_path}: {e}. "
+                f"File logging disabled.",
+                file=sys.stderr,
+            )
+
+        # === Error-Only Log-Datei ===
+        try:
+            error_handler = WindowsSafeRotatingFileHandler(
+                ERROR_LOG_FILE,
+                maxBytes=5 * 1024 * 1024,  # 5 MB
+                backupCount=3,
+                encoding="utf-8",
+            )
+            error_handler.setLevel(logging.ERROR)
+            error_handler.setFormatter(
+                KAILogFormatter(use_colors=False, include_extra=True)
+            )
+            root_logger.addHandler(error_handler)
+        except (OSError, PermissionError) as e:
+            print(
+                f"WARNING: Could not create error handler for {ERROR_LOG_FILE}: {e}. "
+                f"Error file logging disabled.",
+                file=sys.stderr,
+            )
+
+        # === Performance-Logger ===
+        if enable_performance_logging:
+            perf_logger = logging.getLogger("kai.performance")
+            perf_logger.setLevel(logging.INFO)
+            perf_logger.propagate = False  # Verhindere Duplikate im Root-Logger
+
+            try:
+                perf_handler = WindowsSafeRotatingFileHandler(
+                    PERFORMANCE_LOG_FILE,
+                    maxBytes=5 * 1024 * 1024,  # 5 MB
+                    backupCount=3,
+                    encoding="utf-8",
+                )
+                perf_handler.setFormatter(
+                    KAILogFormatter(use_colors=False, include_extra=True)
+                )
+                perf_logger.addHandler(perf_handler)
+            except (OSError, PermissionError) as e:
+                print(
+                    f"WARNING: Could not create performance handler for {PERFORMANCE_LOG_FILE}: {e}. "
+                    f"Performance logging disabled.",
+                    file=sys.stderr,
+                )
+
+        # Initialisierungs-Log
+        logger = logging.getLogger("kai.logging_config")
+        logger.info(
+            "Logging-System initialisiert",
+            extra={
+                "console_level": logging.getLevelName(console_level),
+                "file_level": logging.getLevelName(file_level),
+                "log_file": str(file_path),
+                "performance_logging": enable_performance_logging,
+            },
+        )
 
 
 def get_logger(name: str) -> StructuredLogger:

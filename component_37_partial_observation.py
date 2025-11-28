@@ -330,7 +330,7 @@ class SecondOrderAnalyzer:
     Key reasoning patterns:
     1. "I know the other agent CANNOT know" (Albert's first statement)
     2. "I know the other agent CAN know now" (after elimination)
-    3. "The other agent says they know → eliminate non-identifying values"
+    3. "The other agent says they know -> eliminate non-identifying values"
     """
 
     def __init__(
@@ -411,7 +411,7 @@ class SecondOrderAnalyzer:
 
             # Could other observer uniquely identify object with this observation?
             if self.can_identify_object(other_observer_id, other_observation):
-                # Other COULD know for this object → observer CANNOT be sure other doesn't know
+                # Other COULD know for this object -> observer CANNOT be sure other doesn't know
                 logger.debug(
                     f"Observer '{observer_id}' CANNOT know '{other_observer_id}' doesn't know (counterexample: {obj.object_id})",
                     extra={
@@ -423,7 +423,7 @@ class SecondOrderAnalyzer:
                 )
                 return False
 
-        # For ALL matching objects, other observer could NOT identify → observer KNOWS other doesn't know
+        # For ALL matching objects, other observer could NOT identify -> observer KNOWS other doesn't know
         logger.debug(
             f"Observer '{observer_id}' KNOWS '{other_observer_id}' cannot know",
             extra={
@@ -465,13 +465,13 @@ class SecondOrderAnalyzer:
             ]
 
             if statement_type == "now_i_know":
-                # Agent says "now I know" → they must be able to uniquely identify
+                # Agent says "now I know" -> they must be able to uniquely identify
                 # This means: among current candidates with same observation, only one remains
                 if len(context_objects) == 1:
                     filtered.append(obj)
 
             elif statement_type == "i_dont_know":
-                # Agent says "I don't know" → multiple objects with same observation
+                # Agent says "I don't know" -> multiple objects with same observation
                 if len(context_objects) > 1:
                     filtered.append(obj)
 
@@ -613,7 +613,7 @@ if __name__ == "__main__":
     assert (
         reasoner.uniqueness.is_unique_identifier("sum", 5) is False
     )  # Two objects have sum=5
-    print("✓ Uniqueness analysis passed")
+    print("[OK] Uniqueness analysis passed")
 
     # Test can_identify_object
     print("\nTesting can_identify_object...")
@@ -622,7 +622,7 @@ if __name__ == "__main__":
         is True
     )
     assert reasoner.second_order.can_identify_object("sum_person", {"sum": 5}) is False
-    print("✓ can_identify_object passed")
+    print("[OK] can_identify_object passed")
 
     # Test knows_other_cannot_know
     print("\nTesting knows_other_cannot_know...")
@@ -633,4 +633,4 @@ if __name__ == "__main__":
     )
     print(f"knows_other_cannot_know(sum_person, product_person, sum=5) = {result}")
 
-    print("\n✓ All tests passed!")
+    print("\n[OK] All tests passed!")

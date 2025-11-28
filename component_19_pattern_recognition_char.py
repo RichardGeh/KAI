@@ -169,7 +169,14 @@ class TypoCandidateFinder:
         typo_word = typo_word.lower()
 
         # Hole alle bekannten Wörter
-        known_words = self.netzwerk.get_all_known_words()
+        try:
+            known_words = self.netzwerk.get_all_known_words()
+        except Exception as e:
+            logger.warning(
+                "Failed to fetch known words from Neo4j, returning empty candidates",
+                extra={"error": str(e), "typo_word": typo_word},
+            )
+            return []
 
         if not known_words:
             logger.debug("Keine bekannten Wörter im Graph")
@@ -282,7 +289,11 @@ class TypoCandidateFinder:
 
         # 2. Längen-Ähnlichkeit (0.0 - 1.0)
         len_diff = abs(len(typo_word) - len(candidate))
-        length_score = max(0.0, 1.0 - (len_diff / max(len(typo_word), len(candidate))))
+        max_len = max(len(typo_word), len(candidate))
+        if max_len == 0:
+            length_score = 1.0  # Beide leer = perfekt
+        else:
+            length_score = max(0.0, 1.0 - (len_diff / max_len))
 
         # 3. First/Last Letter Bonus
         first_last_bonus = 0.0
@@ -293,7 +304,14 @@ class TypoCandidateFinder:
                 first_last_bonus += 0.5  # 50% des Bonus
 
         # 4. Word Frequency Score (0.0 - 1.0)
-        frequency_score = self.netzwerk.get_normalized_word_frequency(candidate)
+        try:
+            frequency_score = self.netzwerk.get_normalized_word_frequency(candidate)
+        except Exception as e:
+            logger.warning(
+                "Failed to get word frequency, using default 0.0",
+                extra={"word": candidate, "error": str(e)},
+            )
+            frequency_score = 0.0
 
         # Gewichtete Kombination (neue Gewichtung)
         confidence = (
@@ -357,6 +375,17 @@ def detect_typos(
     finder = TypoCandidateFinder(netzwerk)
     words = text.split()
     corrections = []
+
+    # OPTIMIZATION: Fetch known words ONCE, convert to lowercase set for O(1) lookup
+    try:
+        known_words_raw = netzwerk.get_all_known_words()
+        known_words_set = {w.lower() for w in known_words_raw}
+    except Exception as e:
+        logger.warning(
+            "Failed to fetch known words from Neo4j, typo detection disabled",
+            extra={"error": str(e)},
+        )
+        known_words_set = set()
 
     # WICHTIG: Blacklist häufiger deutscher Funktionswörter
     # Diese sollten NIEMALS als Tippfehler korrigiert werden
@@ -451,9 +480,8 @@ def detect_typos(
         if clean_word.lower() in function_words_blacklist:
             continue
 
-        # Prüfe ob Wort bekannt ist
-        known_words = netzwerk.get_all_known_words()
-        if clean_word.lower() in [w.lower() for w in known_words]:
+        # OPTIMIZED: O(1) lookup statt O(n) list comprehension
+        if clean_word.lower() in known_words_set:
             continue  # Bekanntes Wort, kein Typo
 
         # Suche Kandidaten

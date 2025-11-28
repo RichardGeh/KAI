@@ -490,6 +490,7 @@ class EpisodicMemoryWidget(QWidget):
     def _export_json(self):
         """Exportiert gefilterte Episoden als JSON"""
         if not self.filtered_episodes:
+            self.stats_label.setText("[WARNING] Keine Episoden zum Exportieren")
             return
 
         file_path, _ = QFileDialog.getSaveFileName(
@@ -499,23 +500,47 @@ class EpisodicMemoryWidget(QWidget):
             "JSON Files (*.json)",
         )
 
-        if file_path:
-            try:
-                # Konvertiere Episoden für JSON-Export
-                export_data = {
-                    "export_timestamp": datetime.now().isoformat(),
-                    "total_episodes": len(self.filtered_episodes),
-                    "episodes": self.filtered_episodes,
-                }
+        if not file_path:  # User cancelled
+            return
 
-                with open(file_path, "w", encoding="utf-8") as f:
-                    json.dump(export_data, f, indent=2, ensure_ascii=False, default=str)
+        try:
+            # Konvertiere Episoden für JSON-Export
+            export_data = {
+                "export_timestamp": datetime.now().isoformat(),
+                "total_episodes": len(self.filtered_episodes),
+                "episodes": self.filtered_episodes,
+            }
 
-                self.stats_label.setText(
-                    f"[SUCCESS] {len(self.filtered_episodes)} Episoden exportiert"
-                )
-            except Exception as e:
-                self.stats_label.setText(f"[ERROR] Export fehlgeschlagen: {e}")
+            # Test JSON serializability
+            json_test = json.dumps(export_data, default=str)
+
+            # Write file
+            with open(file_path, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, indent=2, ensure_ascii=False, default=str)
+
+            self.stats_label.setText(
+                f"[SUCCESS] {len(self.filtered_episodes)} Episoden exportiert"
+            )
+
+        except (IOError, OSError) as e:
+            # File system errors (permission, disk full, invalid path)
+            error_msg = f"[ERROR] Dateizugriff fehlgeschlagen: {e}"
+            self.stats_label.setText(error_msg)
+            # TODO: Add logging when component_15 is integrated
+            # logger.error(f"JSON export failed (IOError): {e}", exc_info=True)
+
+        except (TypeError, ValueError) as e:
+            # JSON serialization errors
+            error_msg = f"[ERROR] Daten nicht serialisierbar: {e}"
+            self.stats_label.setText(error_msg)
+            # logger.error(f"JSON export failed (SerializationError): {e}", exc_info=True)
+
+        except Exception as e:
+            # Unexpected errors - log and re-raise in dev mode
+            error_msg = f"[ERROR] Unerwarteter Fehler: {type(e).__name__}"
+            self.stats_label.setText(error_msg)
+            # logger.error(f"JSON export failed (Unexpected): {e}", exc_info=True)
+            raise  # Re-raise in dev mode for debugging
 
     def _export_timeline(self):
         """

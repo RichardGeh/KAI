@@ -13,12 +13,36 @@ Date: 2025-01-30
 """
 
 import heapq
-import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Callable, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-logger = logging.getLogger(__name__)
+from component_15_logging_config import get_logger
+
+logger = get_logger(__name__)
+
+
+def safe_str(obj: Any) -> str:
+    """
+    Convert object to cp1252-safe string for Windows compatibility.
+
+    Replaces characters that cannot be encoded in Windows cp1252 to prevent
+    UnicodeEncodeError in logging and console output.
+
+    Args:
+        obj: Object to convert to string
+
+    Returns:
+        cp1252-safe string representation
+    """
+    s = str(obj)
+    try:
+        # Test if string can be encoded in cp1252
+        s.encode("cp1252")
+        return s
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # Replace problematic characters
+        return s.encode("cp1252", errors="replace").decode("cp1252")
 
 
 # ============================================================================
@@ -60,7 +84,7 @@ class State:
         """Human-readable state description."""
         if not self.propositions:
             return "Empty State"
-        props = sorted([str(p) for p in self.propositions])
+        props = sorted([safe_str(p) for p in self.propositions])
         return "\n".join(props)
 
 
@@ -461,7 +485,7 @@ class StateSpacePlanner:
 
     def diagnose_failure(
         self, problem: PlanningProblem, plan: List[Action]
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Analyze why plan fails (root-cause analysis).
 
@@ -1055,6 +1079,8 @@ class HybridPlanner(StateSpacePlanner):
 
 def main():
     """Example usage: Solve simple Blocks World problem."""
+    import logging
+
     logging.basicConfig(level=logging.INFO)
 
     # Create simple problem: A on B on table → B on A on table

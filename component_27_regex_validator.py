@@ -6,7 +6,7 @@ Prüft Regex-Muster auf Syntaxfehler und Kompatibilität mit KAI-Anforderungen.
 """
 
 import re
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from component_15_logging_config import get_logger
 
@@ -52,9 +52,10 @@ class RegexValidator:
             compiled = re.compile(pattern, re.IGNORECASE)
             details["compiled"] = True
         except re.error as e:
+            details["compiled"] = False
             return (
                 False,
-                f"[ERROR] Ungültige Regex-Syntax: {e}\n\n💡 Tipp: Prüfe Klammern, Backslashes und Sonderzeichen.",
+                f"[ERROR] Ungültige Regex-Syntax: {e}\n\n[TIPP] Prüfe Klammern, Backslashes und Sonderzeichen.",
                 details,
             )
 
@@ -66,7 +67,7 @@ class RegexValidator:
             return (
                 False,
                 f"[ERROR] Zu wenige Capture-Groups: {capture_groups} gefunden, 2 benötigt.\n\n"
-                f"💡 Tipp: Extraktionsregeln brauchen genau 2 Gruppen:\n"
+                f"[TIPP] Extraktionsregeln brauchen genau 2 Gruppen:\n"
                 f"   - Gruppe 1: Subject (was/wer)\n"
                 f"   - Gruppe 2: Object (was/wohin/wie)\n\n"
                 f"Beispiel: r'^(.+) ist (ein|eine) (.+)$' hat 3 Gruppen (zu viele)\n"
@@ -78,7 +79,7 @@ class RegexValidator:
             return (
                 False,
                 f"[ERROR] Zu viele Capture-Groups: {capture_groups} gefunden, 2 benötigt.\n\n"
-                f"💡 Tipp: Verwende non-capturing groups (?:...) für optionale Teile:\n"
+                f"[TIPP] Verwende non-capturing groups (?:...) für optionale Teile:\n"
                 f"   Falsch: r'^(.+) (ein|eine) (.+)$' -> 3 Gruppen\n"
                 f"   Richtig: r'^(.+) (?:ein|eine) (.+)$' -> 2 Gruppen",
                 details,
@@ -132,7 +133,7 @@ class RegexValidator:
 
     def _test_pattern_examples(
         self, pattern: str, compiled: re.Pattern
-    ) -> Dict[str, any]:
+    ) -> Dict[str, Any]:
         """
         Testet Pattern gegen typische Beispielsätze.
 
@@ -150,7 +151,7 @@ class RegexValidator:
         results = {"total": len(test_sentences), "matches": 0, "examples": []}
 
         for sentence in test_sentences:
-            match = compiled.match(sentence, re.IGNORECASE)
+            match = compiled.match(sentence)
             if match:
                 results["matches"] += 1
                 results["examples"].append(
@@ -257,10 +258,17 @@ _regex_validator_instance: Optional[RegexValidator] = None
 def get_regex_validator() -> RegexValidator:
     """
     Gibt Singleton-Instanz des RegexValidators zurück.
+
+    Raises:
+        RuntimeError: Wenn die Initialisierung fehlschlägt
     """
     global _regex_validator_instance
     if _regex_validator_instance is None:
-        _regex_validator_instance = RegexValidator()
+        try:
+            _regex_validator_instance = RegexValidator()
+        except Exception as e:
+            logger.error(f"Failed to initialize RegexValidator: {e}")
+            raise RuntimeError("RegexValidator initialization failed") from e
     return _regex_validator_instance
 
 
@@ -298,7 +306,7 @@ if __name__ == "__main__":
 
             suggestions = validator.suggest_fixes(pattern)
             if suggestions:
-                print("\n💡 Vorschläge:")
+                print("\n[TIPP] Vorschlaege:")
                 for suggestion in suggestions:
                     print(f"  - {suggestion}")
 

@@ -16,6 +16,11 @@ to provide advanced reasoning capabilities without cluttering the main class.
 import logging
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+# Import predicate validation from core module
+from component_9_logik_engine_core import _validate_predicate
+
+# Import shared SAT utilities
+from component_9_sat_utils import fact_to_literal_name
 from component_15_logging_config import get_logger
 
 # Import SAT Solver components
@@ -257,19 +262,16 @@ class AdvancedReasoningMixin:
         """
         Konvertiert Fact zu Literal-Namen für SAT-Solver.
 
+        DEPRECATED: Use fact_to_literal_name from component_9_sat_utils instead.
+        Kept for backward compatibility.
+
         Args:
             fact: Fact-Objekt
 
         Returns:
             String-Repräsentation als Literal-Name
         """
-        lit_name = fact.pred
-        if fact.args:
-            args_str = "_".join(str(v) for k, v in sorted(fact.args.items()))
-            lit_name = f"{lit_name}_{args_str}"
-        # Normalisiere: Keine Sonderzeichen
-        lit_name = lit_name.replace(" ", "_").replace("-", "_")
-        return lit_name
+        return fact_to_literal_name(fact, include_args=True)
 
     # ==================== CONSISTENCY CHECKING ====================
 
@@ -1435,9 +1437,17 @@ class AdvancedReasoningMixin:
         if not self.netzwerk or not self.netzwerk.driver:
             return False
 
+        # SECURITY: Validate that PART_OF is allowed (should always be true)
+        try:
+            _validate_predicate("PART_OF")
+        except ValueError as e:
+            logger.warning(f"PART_OF predicate validation failed: {e}")
+            return False
+
         # Query Neo4j für PART_OF Beziehung zwischen Locations
         with self.netzwerk.driver.session(database="neo4j") as session:
             # Prüfe beide Richtungen: loc1 PART_OF loc2 oder loc2 PART_OF loc1
+            # Safe: uses parameterized queries for loc1/loc2, relationship type is validated constant
             query = """
                 MATCH path = (a:Konzept {name: $loc1})-[:PART_OF*1..3]-(b:Konzept {name: $loc2})
                 RETURN count(path) AS count

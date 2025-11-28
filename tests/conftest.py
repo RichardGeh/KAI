@@ -16,7 +16,9 @@ import pytest
 
 from component_1_netzwerk import KonzeptNetzwerk
 from component_11_embedding_service import EmbeddingService
-from kai_worker import KaiWorker
+
+# Note: kai_worker import only needed for specific tests
+# from kai_worker import KaiWorker
 
 # Semantische Embeddings haben 384 Dimensionen (vorher 8D Featurizer)
 TEST_VECTOR_DIM = 384
@@ -78,6 +80,9 @@ def clean_test_concepts(netzwerk_session):
 @pytest.fixture(scope="function")
 def kai_worker_with_mocks(netzwerk_session):
     """Erstellt einen KaiWorker mit Mock-Signals für Tests."""
+    # Import here to avoid circular dependency
+    from kai_worker import KaiWorker
+
     embedding_service = EmbeddingService()
     worker = KaiWorker(netzwerk_session, embedding_service)
     worker.signals = MagicMock()

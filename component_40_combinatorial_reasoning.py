@@ -24,6 +24,7 @@ Created: 2025-11-04
 import math
 from collections import defaultdict
 from dataclasses import dataclass, field
+from functools import lru_cache
 from itertools import permutations as iter_permutations
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -50,17 +51,40 @@ class Permutation:
 
     Example:
         Permutation({0: 2, 1: 0, 2: 1}) represents the permutation
-        that sends 0→2, 1→0, 2→1
+        that sends 0->2, 1->0, 2->1
     """
 
     mapping: Dict[int, int]
 
     def __post_init__(self):
-        """Validate permutation is bijective."""
+        """Validate permutation is bijective with comprehensive checks."""
+        if not self.mapping:
+            raise ValueError("Permutation cannot be empty")
+
         elements = set(self.mapping.keys())
         images = set(self.mapping.values())
+
         if elements != images:
             raise ValueError(f"Permutation must be bijective: {self.mapping}")
+
+        # Validate all integers
+        if not all(
+            isinstance(k, int) and isinstance(v, int) for k, v in self.mapping.items()
+        ):
+            raise ValueError("Permutation keys and values must be integers")
+
+        # Validate non-negative (required by design)
+        if min(elements) < 0:
+            raise ValueError("Permutation elements must be non-negative")
+
+        # Validate contiguity (required for cycle algorithms)
+        expected = set(range(len(elements)))
+        if elements != expected:
+            raise ValueError(
+                f"Permutation must have contiguous domain starting at 0. "
+                f"Expected {expected}, got {elements}"
+            )
+
         self.elements = elements
 
     @classmethod
@@ -77,7 +101,7 @@ class Permutation:
             lst: List where lst[i] is the image of i
 
         Example:
-            from_list([2, 0, 1]) creates permutation 0→2, 1→0, 2→1
+            from_list([2, 0, 1]) creates permutation 0->2, 1->0, 2->1
         """
         return cls({i: lst[i] for i in range(len(lst))})
 
@@ -104,7 +128,7 @@ class Cycle:
     Represents a cycle in a permutation.
 
     A cycle is a sequence of elements [a1, a2, ..., ak] where
-    a1 → a2 → ... → ak → a1
+    a1 -> a2 -> ... -> ak -> a1
 
     Attributes:
         elements: List of elements in cycle order
@@ -190,7 +214,7 @@ class CycleAnalyzer:
         Compute distribution of cycle lengths.
 
         Returns:
-            Dict mapping cycle_length → count
+            Dict mapping cycle_length -> count
 
         Example:
             {1: 2, 3: 1} means 2 cycles of length 1, 1 cycle of length 3
@@ -218,6 +242,16 @@ class CycleAnalyzer:
 
         Returns:
             Cycle containing the element
+
+        Raises:
+            ValueError: If element not in permutation
+
+        Time Complexity: O(k) where k is the cycle length
+        Space Complexity: O(k)
+
+        Note:
+            For multiple elements, consider using find_cycles() once
+            to avoid redundant traversals.
         """
         if element not in perm.elements:
             raise ValueError(f"Element {element} not in permutation")
@@ -279,6 +313,11 @@ class Strategy:
         """
         Execute strategy to make decision.
 
+        NOTE: Currently not used in codebase. Strategy evaluation uses
+        metadata["evaluation_function"] instead. This method is available
+        for future use cases where decision-making is needed separate from
+        evaluation (e.g., online decision-making vs. offline analysis).
+
         Args:
             state: Current problem state
 
@@ -319,10 +358,16 @@ class StrategyEvaluation:
     metrics: Dict[str, float] = field(default_factory=dict)
 
     def __post_init__(self):
-        """Validate probabilities."""
+        """Validate probabilities and expected values."""
         if not 0.0 <= self.success_probability <= 1.0:
             raise ValueError(
                 f"success_probability must be in [0, 1]: {self.success_probability}"
+            )
+
+        # Validate expected_value is numeric (may represent utility, not just probability)
+        if not isinstance(self.expected_value, (int, float)):
+            raise TypeError(
+                f"expected_value must be numeric, got {type(self.expected_value)}"
             )
 
 
@@ -433,7 +478,6 @@ class StrategyEvaluator:
         proof_steps = []
 
         # List all strategies
-        [ev.strategy.name for ev in evaluations]
         proof_steps.append(
             ProofStep(
                 step_id="compare-premise",
@@ -551,16 +595,29 @@ class CombinatorialProbability:
             return CombinatorialProbability._asymptotic_max_cycle_prob(n, threshold)
 
     @staticmethod
+    @lru_cache(maxsize=128)
     def _exact_max_cycle_prob(n: int, threshold: int) -> float:
         """
         Exact computation via permutation enumeration (expensive!).
 
-        Only use for small n (≤ 10).
+        Cached for performance - results are deterministic.
+        Only use for small n (<=10).
         """
-        if n > 10:
+        MAX_EXACT_N = 12  # 12! = 479,001,600 permutations (~reasonable limit)
+
+        if n > MAX_EXACT_N:
+            raise ValueError(
+                f"Exact computation only supported for n <= {MAX_EXACT_N}. "
+                f"For n={n}, use asymptotic approximation instead."
+            )
+        elif n > 10:
             logger.warning(
-                "Exact computation expensive for large n - consider asymptotic",
-                extra={"n": n, "threshold": threshold},
+                "Exact computation expensive for n > 10",
+                extra={
+                    "n": n,
+                    "threshold": threshold,
+                    "permutations": math.factorial(n),
+                },
             )
 
         count_exceeds = 0
@@ -628,6 +685,11 @@ class CombinatorialProbability:
         # At k = n/2: P(max > k) ≈ ln(2) ≈ 0.693
         # At k = n: P(max > k) = 0
         # At k = 0: P(max > k) = 1
+        #
+        # TODO: This linear interpolation is mathematically crude and may introduce
+        # significant errors for intermediate threshold values. Consider implementing
+        # proper alternating harmonic series approximation or Stirling number formula.
+        # Reference: Flajolet & Sedgewick "Analytic Combinatorics" (2009)
 
         if threshold <= n / 2:
             # Between 0 and n/2: interpolate between 1 and ln(2)
@@ -641,12 +703,14 @@ class CombinatorialProbability:
         return prob_exceed
 
     @staticmethod
+    @lru_cache(maxsize=128)
     def expected_max_cycle_length(n: int) -> float:
         """
         Expected maximum cycle length in random permutation of n elements.
 
         Asymptotically: E[max cycle] ≈ λ * n where λ ≈ 0.624 (Golomb-Dickman)
 
+        Cached for performance - results are deterministic.
         For small n, use exact computation.
         """
         if n <= 1:
@@ -832,7 +896,7 @@ def create_strategy(
     Args:
         name: Strategy name
         description: Strategy explanation
-        parameters: Dict of parameter_name → parameter_value
+        parameters: Dict of parameter_name -> parameter_value
         evaluation_function: Optional function for evaluation
 
     Returns:
@@ -859,7 +923,7 @@ def create_strategy(
 
 if __name__ == "__main__":
     # Example: Analyze a permutation
-    perm = Permutation.from_list([2, 0, 3, 1, 4])  # 0→2→3→1→0, 4→4
+    perm = Permutation.from_list([2, 0, 3, 1, 4])  # 0->2->3->1->0, 4->4
     reasoner = CombinatorialReasoner()
     cycles, analysis = reasoner.analyze_permutation(perm)
     print(f"Cycles: {cycles}")

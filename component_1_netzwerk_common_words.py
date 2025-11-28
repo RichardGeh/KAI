@@ -39,7 +39,8 @@ class CommonWordsManager:
 
     def _ensure_constraints(self):
         """Erstellt Unique-Constraint für CommonWord.word"""
-        with self.driver.session() as session:
+        # FIX: Explizite database-Angabe (Code Review 2025-11-21, Concern 10)
+        with self.driver.session(database="neo4j") as session:
             try:
                 session.run(
                     "CREATE CONSTRAINT common_word_unique IF NOT EXISTS "
@@ -65,7 +66,7 @@ class CommonWordsManager:
         """
         word_lower = word.lower().strip()
 
-        with self.driver.session() as session:
+        with self.driver.session(database="neo4j") as session:
             result = session.run(
                 """
                 MERGE (cw:CommonWord {word: $word})
@@ -85,13 +86,17 @@ class CommonWordsManager:
             )
 
             record = result.single()
-            if record:
-                created = record.get("created", False)
-                if created:
-                    logger.debug(f"CommonWord erstellt: {word_lower} ({category})")
-                return created
+            # FIX: Explizite Behandlung wenn record None ist (Code Review 2025-11-21)
+            if not record:
+                logger.warning(
+                    f"CommonWord konnte nicht erstellt/aktualisiert werden: {word_lower}"
+                )
+                return False
 
-        return False
+            created = record.get("created", False)
+            if created:
+                logger.debug(f"CommonWord erstellt: {word_lower} ({category})")
+            return created
 
     def add_common_words_batch(self, words_dict: dict) -> int:
         """
@@ -123,7 +128,7 @@ class CommonWordsManager:
         Returns:
             Set von Wörtern (lowercase)
         """
-        with self.driver.session() as session:
+        with self.driver.session(database="neo4j") as session:
             if category:
                 result = session.run(
                     """
@@ -159,7 +164,7 @@ class CommonWordsManager:
         """
         word_lower = word.lower().strip()
 
-        with self.driver.session() as session:
+        with self.driver.session(database="neo4j") as session:
             result = session.run(
                 """
                 MATCH (cw:CommonWord {word: $word})
@@ -183,7 +188,7 @@ class CommonWordsManager:
         """
         word_lower = word.lower().strip()
 
-        with self.driver.session() as session:
+        with self.driver.session(database="neo4j") as session:
             result = session.run(
                 """
                 MATCH (cw:CommonWord {word: $word})
@@ -209,7 +214,7 @@ class CommonWordsManager:
         Returns:
             Dictionary mit total, by_category
         """
-        with self.driver.session() as session:
+        with self.driver.session(database="neo4j") as session:
             result = session.run(
                 """
                 MATCH (cw:CommonWord)

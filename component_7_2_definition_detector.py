@@ -3,6 +3,10 @@
 Deklarative Aussagen-Erkennung (Definitionen).
 Erkennt automatisch deklarative Aussagen und wandelt sie in DEFINITION MeaningPoints um.
 
+WICHTIG: KEINE Unicode-Zeichen verwenden, die Windows cp1252 Encoding-Probleme verursachen.
+Verboten: OK FEHLER -> x / != <= >= etc.
+Erlaubt: [OK] [FEHLER] -> * / != <= >= AND OR NOT
+
 Unterstützte Relationstypen:
 - IS_A: "X ist ein/eine Y"
 - HAS_PROPERTY: "X ist Y" (Adjektiv)
@@ -13,18 +17,17 @@ Unterstützte Relationstypen:
 - COMPARATIVE: "X ist größer als Y"
 """
 import re
-import uuid
 
 from spacy.tokens import Doc
 
 from component_5_linguistik_strukturen import (
     MeaningPoint,
     MeaningPointCategory,
-    Modality,
     Polarity,
 )
 from component_6_linguistik_engine import LinguisticPreprocessor
 from component_7_4_linguistic_features import LinguisticFeatureExtractor
+from component_7_meaning_point_factory import create_meaning_point
 from component_15_logging_config import get_logger
 from component_utils_text_normalization import TextNormalizer
 
@@ -173,7 +176,7 @@ class DefinitionDetector:
 
                 # Mittlere Confidence für Konditionale (komplexe Logik)
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.DEFINITION,
                         cue="auto_detect_conditional",
                         text_span=text,
@@ -214,7 +217,7 @@ class DefinitionDetector:
 
             # Hohe Confidence für eindeutige Komparative
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.DEFINITION,
                     cue="auto_detect_comparative",
                     text_span=text,
@@ -262,7 +265,7 @@ class DefinitionDetector:
 
             # Haupt-IS_A MeaningPoint
             meaning_points = [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.DEFINITION,
                     cue="auto_detect_is_a",
                     text_span=text,
@@ -281,7 +284,7 @@ class DefinitionDetector:
                 )
                 for adj in adjectives:
                     meaning_points.append(
-                        self._create_meaning_point(
+                        create_meaning_point(
                             category=MeaningPointCategory.DEFINITION,
                             cue="auto_detect_has_property_from_is_a",
                             text_span=text,
@@ -347,7 +350,7 @@ class DefinitionDetector:
                 # PHASE 3 (Schritt 3): Hohe Confidence für Plural IS_A ohne Artikel
                 # confidence >= 0.85 -> Auto-Save
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.DEFINITION,
                         cue="auto_detect_is_a_plural",
                         text_span=text,
@@ -407,7 +410,7 @@ class DefinitionDetector:
                 # PHASE 3 (Schritt 3): Mittlere Confidence für Eigenschaften (mehrdeutig)
                 # 0.70 <= confidence < 0.85 -> Confirmation erforderlich
                 return [
-                    self._create_meaning_point(
+                    create_meaning_point(
                         category=MeaningPointCategory.DEFINITION,
                         cue="auto_detect_has_property",
                         text_span=text,
@@ -465,7 +468,7 @@ class DefinitionDetector:
             # PHASE 3 (Schritt 3): Sehr hohe Confidence für "kann"-Konstruktionen
             # confidence >= 0.85 -> Auto-Save
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.DEFINITION,
                     cue="auto_detect_capable_of",
                     text_span=text,
@@ -512,7 +515,7 @@ class DefinitionDetector:
             # PHASE 3 (Schritt 3): Hohe Confidence für PART_OF Relationen
             # confidence >= 0.85 -> Auto-Save
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.DEFINITION,
                     cue="auto_detect_part_of",
                     text_span=text,
@@ -553,7 +556,7 @@ class DefinitionDetector:
             # PHASE 3 (Schritt 3): Sehr hohe Confidence für klare Lokations-Muster
             # confidence >= 0.85 -> Auto-Save
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.DEFINITION,
                     cue="auto_detect_located_in",
                     text_span=text,
@@ -587,7 +590,7 @@ class DefinitionDetector:
             # PHASE 3 (Schritt 3): Hohe Confidence für "leben in/wohnen in" Muster
             # confidence >= 0.85 -> Auto-Save
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.DEFINITION,
                     cue="auto_detect_lives_in",
                     text_span=text,
@@ -629,42 +632,3 @@ class DefinitionDetector:
             logger.debug(f"Fehler bei Adjektiv-Extraktion: {e}")
 
         return adjectives
-
-    def _create_meaning_point(self, **kwargs) -> MeaningPoint:
-        """
-        Factory-Methode zum Erstellen von MeaningPoint-Objekten mit sinnvollen Defaults.
-
-        Args:
-            **kwargs: Beliebige MeaningPoint-Attribute (überschreiben Defaults)
-
-        Returns:
-            Ein vollständig initialisiertes MeaningPoint-Objekt
-        """
-        try:
-            # Sinnvolle Defaults
-            defaults = {
-                "id": f"mp-{uuid.uuid4().hex[:6]}",
-                "modality": Modality.DECLARATIVE,
-                "polarity": Polarity.POSITIVE,
-                "confidence": 0.7,  # Konservativ, wird oft überschrieben
-                "arguments": {},
-                "span_offsets": [],
-                "source_rules": [],
-            }
-
-            # Kategorie-spezifische Modality
-            category = kwargs.get("category")
-            if category == MeaningPointCategory.QUESTION:
-                defaults["modality"] = Modality.INTERROGATIVE
-            elif category == MeaningPointCategory.COMMAND:
-                defaults["modality"] = Modality.IMPERATIVE
-
-            # Merge mit übergebenen Parametern
-            defaults.update(kwargs)
-
-            return MeaningPoint(**defaults)
-
-        except Exception as e:
-            logger.error(f"Fehler beim Erstellen des MeaningPoints: {e}", exc_info=True)
-            # Rethrow, da ein MeaningPoint essentiell ist
-            raise

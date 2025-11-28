@@ -167,7 +167,17 @@ class Constraint:
                     "error": str(e),
                 },
             )
-            return False
+            # Re-raise with context instead of silently returning False
+            # This prevents masking predicate errors as constraint violations
+            raise ConstraintReasoningError(
+                f"Constraint '{self.name}' predicate raised exception: {e}",
+                context={
+                    "constraint": self.name,
+                    "scope": self.scope,
+                    "assignment": relevant_assignment,
+                    "original_error": str(e),
+                },
+            ) from e
 
     def get_related_variables(self, var_name: str) -> List[str]:
         """

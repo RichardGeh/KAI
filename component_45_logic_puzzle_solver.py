@@ -29,11 +29,47 @@ import spacy
 
 from component_15_logging_config import get_logger
 from component_30_sat_solver import Clause, CNFFormula, Literal, SATSolver
+from kai_exceptions import (
+    ConstraintReasoningError,
+    ParsingError,
+    SpaCyModelError,
+)
 
 logger = get_logger(__name__)
 
-# Lade spaCy-Modell für dynamische Objekt-Extraktion
-nlp = spacy.load("de_core_news_sm")
+# Lazy loading für spaCy-Modell (wird erst bei Bedarf geladen)
+_nlp_model = None
+
+
+def _get_nlp_model():
+    """
+    Lazy loading für spaCy-Modell mit Error Handling.
+
+    Returns:
+        spaCy Language-Modell
+
+    Raises:
+        SpaCyModelError: Wenn Modell nicht geladen werden kann
+    """
+    global _nlp_model
+    if _nlp_model is None:
+        try:
+            _nlp_model = spacy.load("de_core_news_sm")
+            logger.info("spaCy-Modell 'de_core_news_sm' erfolgreich geladen")
+        except OSError as e:
+            raise SpaCyModelError(
+                "spaCy-Modell 'de_core_news_sm' konnte nicht geladen werden. "
+                "Bitte installieren mit: python -m spacy download de_core_news_sm",
+                context={"model_name": "de_core_news_sm"},
+                original_exception=e,
+            )
+        except Exception as e:
+            raise SpaCyModelError(
+                "Unerwarteter Fehler beim Laden des spaCy-Modells",
+                context={"model_name": "de_core_news_sm"},
+                original_exception=e,
+            )
+    return _nlp_model
 
 
 @dataclass
@@ -99,8 +135,21 @@ class LogicConditionParser:
 
         Args:
             text: Vollständiger Text des Rätsels
+
+        Raises:
+            ParsingError: Wenn spaCy-Verarbeitung fehlschlägt
         """
-        doc = nlp(text)
+        try:
+            nlp = _get_nlp_model()
+            doc = nlp(text)
+        except SpaCyModelError:
+            raise  # Re-raise SpaCy-spezifischen Fehler
+        except Exception as e:
+            raise ParsingError(
+                "Fehler bei der spaCy-Verarbeitung des Textes",
+                context={"text_length": len(text)},
+                original_exception=e,
+            )
 
         # Sammle potenzielle Objekte mit Kontext
         potential_objects = {}
@@ -208,105 +257,128 @@ class LogicConditionParser:
 
         Returns:
             Liste von LogicCondition Objekten
+
+        Raises:
+            ParsingError: Wenn Text-Parsing fehlschlägt
+            SpaCyModelError: Wenn spaCy-Modell nicht verfügbar
         """
-        self.entities = set(e.lower() for e in entities)
-        conditions = []
+        try:
+            self.entities = set(e.lower() for e in entities)
+            conditions = []
 
-        # SCHRITT 1: Extrahiere dynamisch alle Objekte aus dem Text
-        self._extract_objects_from_text(text)
-
-        # SCHRITT 2: Erkenne Haupt-Objekt (häufigstes/erstes Objekt)
-        if self._detected_objects:
-            # Nutze das erste erkannte Objekt als Kontext (kann später verfeinert werden)
-            self._context_object = list(self._detected_objects)[0]
-            logger.debug(f"Kontext-Objekt erkannt: {self._context_object}")
-
-        # VERBESSERTE SEGMENTIERUNG:
-        # Splitte bei:
-        # - Satzende (.!?)
-        # - Zeilenumbrüchen (wichtig für Listen-Format!)
-        # - Aufzählungen mit Nummerierung (1., 2., etc.)
-        # - Semantische Marker (Allerdings, Hingegen, Wenn ... dann als neue Zeile)
-
-        # Schritt 1: Normalisiere Zeilenumbrüche zu künstlichen Breaks
-        # WICHTIG: Zeilenumbrüche NICHT einfach entfernen, sondern als Trenner nutzen!
-        text = text.replace("\r\n", "|").replace("\n", "|").replace("\r", "|")
-
-        # Schritt 2: Füge künstliche Breaks bei semantischen Markern ein
-        # WICHTIG: Auch bei fehlenden Punkten splitten!
-        semantic_markers = [
-            "Allerdings",
-            "Hingegen",
-            "Außerdem",
-            "Ferner",
-            "Weiterhin",
-            "Es kann vorkommen",
-            "Es geschieht",
-            "Wenn",  # Neue Bedingung beginnt
-        ]
-
-        for marker in semantic_markers:
-            # Füge | VOR dem Marker ein
-            # Pattern 1: Nach Punkt/Fragezeichen/Ausrufezeichen
-            text = re.sub(r"(?<=[.!?]\s)" + re.escape(marker), "|" + marker, text)
-            # Pattern 2: Nach Doppelpunkt
-            text = re.sub(r":\s*" + re.escape(marker), ":" + "|" + marker, text)
-            # Pattern 3: OHNE Punkt (wichtig für zusammengeklebte Sätze!)
-            # Ersetze "einen Es kann" mit "einen | Es kann"
-            # Aber NUR wenn das Wort großgeschrieben ist (Satzanfang)
-            text = re.sub(
-                r"([a-z])\s+" + re.escape(marker) + r"\b", r"\1 |" + marker, text
-            )
-
-        # Schritt 3: Splitte bei Satzende UND bei künstlichen Breaks
-        sentences = re.split(r"[.!?]|\|", text)
-
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if not sentence or len(sentence) < 10:  # Ignoriere zu kurze Fragmente
-                continue
-
-            # FILTER: Ignoriere Kontext-Sätze (keine echten logischen Bedingungen)
-            # Heuristiken für Kontext-Sätze:
-            # 1. Häufigkeits-Adverbien (oft, manchmal, gelegentlich)
-            # 2. Negative Wissens-Aussagen (wissen nicht, nicht wissen)
-            # 3. Sätze ohne logische Operatoren
-            if (
-                re.search(
-                    r"\b(oft|manchmal|gelegentlich|normalerweise|üblicherweise)\b",
-                    sentence,
-                    re.IGNORECASE,
+            # SCHRITT 1: Extrahiere dynamisch alle Objekte aus dem Text
+            try:
+                self._extract_objects_from_text(text)
+            except (ParsingError, SpaCyModelError):
+                raise  # Re-raise bekannte Fehler
+            except Exception as e:
+                raise ParsingError(
+                    "Fehler beim Extrahieren von Objekten aus Text",
+                    context={"text_length": len(text)},
+                    original_exception=e,
                 )
-                or re.search(
-                    r"\b(wissen\s+nicht|nicht\s+wissen|weiß\s+nicht|nicht\s+weiß)\b",
-                    sentence,
-                    re.IGNORECASE,
+
+            # SCHRITT 2: Erkenne Haupt-Objekt (häufigstes/erstes Objekt)
+            if self._detected_objects:
+                # Nutze das erste erkannte Objekt als Kontext (kann später verfeinert werden)
+                self._context_object = list(self._detected_objects)[0]
+                logger.debug(f"Kontext-Objekt erkannt: {self._context_object}")
+
+            # VERBESSERTE SEGMENTIERUNG:
+            # Splitte bei:
+            # - Satzende (.!?)
+            # - Zeilenumbrüchen (wichtig für Listen-Format!)
+            # - Aufzählungen mit Nummerierung (1., 2., etc.)
+            # - Semantische Marker (Allerdings, Hingegen, Wenn ... dann als neue Zeile)
+
+            # Schritt 1: Normalisiere Zeilenumbrüche zu künstlichen Breaks
+            # WICHTIG: Zeilenumbrüche NICHT einfach entfernen, sondern als Trenner nutzen!
+            text = text.replace("\r\n", "|").replace("\n", "|").replace("\r", "|")
+
+            # Schritt 2: Füge künstliche Breaks bei semantischen Markern ein
+            # WICHTIG: Auch bei fehlenden Punkten splitten!
+            semantic_markers = [
+                "Allerdings",
+                "Hingegen",
+                "Außerdem",
+                "Ferner",
+                "Weiterhin",
+                "Es kann vorkommen",
+                "Es geschieht",
+                "Wenn",  # Neue Bedingung beginnt
+            ]
+
+            for marker in semantic_markers:
+                # Füge | VOR dem Marker ein
+                # Pattern 1: Nach Punkt/Fragezeichen/Ausrufezeichen
+                text = re.sub(r"(?<=[.!?]\s)" + re.escape(marker), "|" + marker, text)
+                # Pattern 2: Nach Doppelpunkt
+                text = re.sub(r":\s*" + re.escape(marker), ":" + "|" + marker, text)
+                # Pattern 3: OHNE Punkt (wichtig für zusammengeklebte Sätze!)
+                # Ersetze "einen Es kann" mit "einen | Es kann"
+                # Aber NUR wenn das Wort großgeschrieben ist (Satzanfang)
+                text = re.sub(
+                    r"([a-z])\s+" + re.escape(marker) + r"\b", r"\1 |" + marker, text
                 )
-                or sentence.lower().startswith("allerdings wissen wir")
-                or sentence.lower() == "allerdings wissen wir folgendes:"
-            ):
-                logger.debug(f"Kontext-Satz ignoriert: '{sentence}'")
-                continue
 
-            logger.debug(f"Parse Bedingung: '{sentence}'")
+            # Schritt 3: Splitte bei Satzende UND bei künstlichen Breaks
+            sentences = re.split(r"[.!?]|\|", text)
 
-            # Versuche verschiedene Condition-Types zu matchen
-            condition = (
-                self._parse_implication(sentence)
-                or self._parse_xor(sentence)
-                or self._parse_never_both(sentence)
-                or self._parse_conjunction(sentence)
-                or self._parse_disjunction(sentence)
-                or self._parse_negation(sentence)
+            for sentence in sentences:
+                sentence = sentence.strip()
+                if not sentence or len(sentence) < 10:  # Ignoriere zu kurze Fragmente
+                    continue
+
+                # FILTER: Ignoriere Kontext-Sätze (keine echten logischen Bedingungen)
+                # Heuristiken für Kontext-Sätze:
+                # 1. Häufigkeits-Adverbien (oft, manchmal, gelegentlich)
+                # 2. Negative Wissens-Aussagen (wissen nicht, nicht wissen)
+                # 3. Sätze ohne logische Operatoren
+                if (
+                    re.search(
+                        r"\b(oft|manchmal|gelegentlich|normalerweise|üblicherweise)\b",
+                        sentence,
+                        re.IGNORECASE,
+                    )
+                    or re.search(
+                        r"\b(wissen\s+nicht|nicht\s+wissen|weiß\s+nicht|nicht\s+weiß)\b",
+                        sentence,
+                        re.IGNORECASE,
+                    )
+                    or sentence.lower().startswith("allerdings wissen wir")
+                    or sentence.lower() == "allerdings wissen wir folgendes:"
+                ):
+                    logger.debug(f"Kontext-Satz ignoriert: '{sentence}'")
+                    continue
+
+                logger.debug(f"Parse Bedingung: '{sentence}'")
+
+                # Versuche verschiedene Condition-Types zu matchen
+                condition = (
+                    self._parse_implication(sentence)
+                    or self._parse_xor(sentence)
+                    or self._parse_never_both(sentence)
+                    or self._parse_conjunction(sentence)
+                    or self._parse_disjunction(sentence)
+                    or self._parse_negation(sentence)
+                )
+
+                if condition:
+                    conditions.append(condition)
+                    logger.info(f"[OK] Bedingung geparst: {condition.condition_type}")
+                else:
+                    logger.debug(f"Keine logische Bedingung erkannt in: '{sentence}'")
+
+            return conditions
+
+        except (ParsingError, SpaCyModelError):
+            raise  # Re-raise bekannte Fehler
+        except Exception as e:
+            raise ParsingError(
+                "Fehler beim Parsen der Bedingungen",
+                context={"text_length": len(text), "num_entities": len(entities)},
+                original_exception=e,
             )
-
-            if condition:
-                conditions.append(condition)
-                logger.info(f"[OK] Bedingung geparst: {condition.condition_type}")
-            else:
-                logger.debug(f"Keine logische Bedingung erkannt in: '{sentence}'")
-
-        return conditions
 
     def _parse_implication(self, sentence: str) -> Optional[LogicCondition]:
         """
@@ -315,29 +387,39 @@ class LogicConditionParser:
         Patterns:
         - "Wenn X, (dann) Y"
         - "Falls X, Y"
+
+        Raises:
+            ParsingError: Wenn Variablen-Extraktion fehlschlägt
         """
-        # Pattern: "Wenn X, (dann) Y"
-        match = re.match(
-            r"(?:wenn|falls)\s+(.+?),\s*(?:dann\s+)?(.+)", sentence, re.IGNORECASE
-        )
+        try:
+            # Pattern: "Wenn X, (dann) Y"
+            match = re.match(
+                r"(?:wenn|falls)\s+(.+?),\s*(?:dann\s+)?(.+)", sentence, re.IGNORECASE
+            )
 
-        if match:
-            antecedent_text = match.group(1).strip()
-            consequent_text = match.group(2).strip()
+            if match:
+                antecedent_text = match.group(1).strip()
+                consequent_text = match.group(2).strip()
 
-            # Extrahiere Variablen aus beiden Teilen
-            antecedent_vars = self._extract_variables(antecedent_text)
-            consequent_vars = self._extract_variables(consequent_text)
+                # Extrahiere Variablen aus beiden Teilen
+                antecedent_vars = self._extract_variables(antecedent_text)
+                consequent_vars = self._extract_variables(consequent_text)
 
-            if antecedent_vars and consequent_vars:
-                # Für Implikation: X → Y = ¬X ∨ Y (CNF)
-                return LogicCondition(
-                    condition_type="IMPLICATION",
-                    operands=[antecedent_vars[0], consequent_vars[0]],
-                    text=sentence,
-                )
+                if antecedent_vars and consequent_vars:
+                    # Für Implikation: X → Y = ¬X ∨ Y (CNF)
+                    return LogicCondition(
+                        condition_type="IMPLICATION",
+                        operands=[antecedent_vars[0], consequent_vars[0]],
+                        text=sentence,
+                    )
 
-        return None
+            return None
+        except Exception as e:
+            raise ParsingError(
+                "Fehler beim Parsen der Implikation",
+                context={"sentence": sentence},
+                original_exception=e,
+            )
 
     def _parse_xor(self, sentence: str) -> Optional[LogicCondition]:
         """
@@ -348,60 +430,70 @@ class LogicConditionParser:
         - "X oder Y, aber nie beide"
         - "entweder X oder Y"
         - "dass X oder Y ... aber nie beide zusammen" (mit dass-Präfix)
+
+        Raises:
+            ParsingError: Wenn Variablen-Extraktion fehlschlägt
         """
-        # Pattern 1: "... dass X oder Y ... aber (nie/nicht) beide (zusammen)"
-        # Beispiel: "Es kann vorkommen, dass Mark oder Nick ... aber nie beide zusammen"
+        try:
+            # Pattern 1: "... dass X oder Y ... aber (nie/nicht) beide (zusammen)"
+            # Beispiel: "Es kann vorkommen, dass Mark oder Nick ... aber nie beide zusammen"
 
-        # Strategie: Entferne zuerst das Präfix, dann parse die eigentliche Bedingung
-        cleaned_sentence = sentence
+            # Strategie: Entferne zuerst das Präfix, dann parse die eigentliche Bedingung
+            cleaned_sentence = sentence
 
-        # Entferne Präfixe wie "Es kann vorkommen, dass", "Es geschieht, dass", etc.
-        prefix_pattern = r"^.+?(?:dass|wenn|falls)\s+"
-        cleaned_sentence = re.sub(
-            prefix_pattern, "", cleaned_sentence, flags=re.IGNORECASE
-        )
+            # Entferne Präfixe wie "Es kann vorkommen, dass", "Es geschieht, dass", etc.
+            prefix_pattern = r"^.+?(?:dass|wenn|falls)\s+"
+            cleaned_sentence = re.sub(
+                prefix_pattern, "", cleaned_sentence, flags=re.IGNORECASE
+            )
 
-        # Jetzt parse: "Mark oder Nick einen Brandy bestellen, aber nie beide zusammen"
-        match = re.search(
-            r"(.+?)\s+oder\s+(.+?),?\s*aber\s+(?:nie|nicht|niemals)\s+beide(?:\s+zusammen)?",
-            cleaned_sentence,
-            re.IGNORECASE,
-        )
+            # Jetzt parse: "Mark oder Nick einen Brandy bestellen, aber nie beide zusammen"
+            match = re.search(
+                r"(.+?)\s+oder\s+(.+?),?\s*aber\s+(?:nie|nicht|niemals)\s+beide(?:\s+zusammen)?",
+                cleaned_sentence,
+                re.IGNORECASE,
+            )
 
-        if match:
-            left_text = match.group(1).strip()
-            right_text = match.group(2).strip()
+            if match:
+                left_text = match.group(1).strip()
+                right_text = match.group(2).strip()
 
-            left_vars = self._extract_variables(left_text)
-            right_vars = self._extract_variables(right_text)
+                left_vars = self._extract_variables(left_text)
+                right_vars = self._extract_variables(right_text)
 
-            if left_vars and right_vars:
-                logger.info(f"[OK] XOR erkannt: {left_vars[0]} ⊕ {right_vars[0]}")
-                # XOR: (X ∨ Y) ∧ ¬(X ∧ Y)
-                return LogicCondition(
-                    condition_type="XOR",
-                    operands=[left_vars[0], right_vars[0]],
-                    text=sentence,
-                )
+                if left_vars and right_vars:
+                    logger.info(f"[OK] XOR erkannt: {left_vars[0]} ⊕ {right_vars[0]}")
+                    # XOR: (X ∨ Y) ∧ ¬(X ∧ Y)
+                    return LogicCondition(
+                        condition_type="XOR",
+                        operands=[left_vars[0], right_vars[0]],
+                        text=sentence,
+                    )
 
-        # Pattern 2: "entweder X oder Y"
-        match = re.match(r"entweder\s+(.+?)\s+oder\s+(.+)", sentence, re.IGNORECASE)
+            # Pattern 2: "entweder X oder Y"
+            match = re.match(r"entweder\s+(.+?)\s+oder\s+(.+)", sentence, re.IGNORECASE)
 
-        if match:
-            left_text = match.group(1).strip()
-            right_text = match.group(2).strip()
+            if match:
+                left_text = match.group(1).strip()
+                right_text = match.group(2).strip()
 
-            left_vars = self._extract_variables(left_text)
-            right_vars = self._extract_variables(right_text)
+                left_vars = self._extract_variables(left_text)
+                right_vars = self._extract_variables(right_text)
 
-            if left_vars and right_vars:
-                return LogicCondition(
-                    condition_type="XOR",
-                    operands=[left_vars[0], right_vars[0]],
-                    text=sentence,
-                )
+                if left_vars and right_vars:
+                    return LogicCondition(
+                        condition_type="XOR",
+                        operands=[left_vars[0], right_vars[0]],
+                        text=sentence,
+                    )
 
-        return None
+            return None
+        except Exception as e:
+            raise ParsingError(
+                "Fehler beim Parsen der XOR-Bedingung",
+                context={"sentence": sentence},
+                original_exception=e,
+            )
 
     def _parse_never_both(self, sentence: str) -> Optional[LogicCondition]:
         """
@@ -411,45 +503,18 @@ class LogicConditionParser:
         - "nie X und Y"
         - "niemals X und Y zusammen"
         - "nicht X und Y gleichzeitig"
+
+        Raises:
+            ParsingError: Wenn Variablen-Extraktion fehlschlägt
         """
-        # Pattern: "nie(mals) X (und) Y (zusammen/gleichzeitig)"
-        match = re.match(
-            r"nie(?:mals)?\s+(.+?)\s+(?:und\s+)?(.+?)(?:\s+(?:zusammen|gleichzeitig))?",
-            sentence,
-            re.IGNORECASE,
-        )
-
-        if match:
-            left_text = match.group(1).strip()
-            right_text = match.group(2).strip()
-
-            left_vars = self._extract_variables(left_text)
-            right_vars = self._extract_variables(right_text)
-
-            if left_vars and right_vars:
-                return LogicCondition(
-                    condition_type="NEVER_BOTH",
-                    operands=[left_vars[0], right_vars[0]],
-                    text=sentence,
-                )
-
-        return None
-
-    def _parse_conjunction(self, sentence: str) -> Optional[LogicCondition]:
-        """
-        Parst Konjunktion: "X und Y" → (X ∧ Y)
-
-        ABER: "X und Y einzeln oder gleichzeitig" → (X ∨ Y) [DISJUNCTION!]
-        """
-        # SPEZIALFALL: "X und Y einzeln oder gleichzeitig/zusammen"
-        # Bedeutung: "individually or simultaneously" = at least one = DISJUNCTION
-        if re.search(
-            r"einzeln\s+oder\s+(gleichzeitig|zusammen)", sentence, re.IGNORECASE
-        ):
-            # Parse als DISJUNCTION statt CONJUNCTION
-            match = re.search(
-                r"(.+?)\s+und\s+(.+?)\s+einzeln\s+oder", sentence, re.IGNORECASE
+        try:
+            # Pattern: "nie(mals) X (und) Y (zusammen/gleichzeitig)"
+            match = re.match(
+                r"nie(?:mals)?\s+(.+?)\s+(?:und\s+)?(.+?)(?:\s+(?:zusammen|gleichzeitig))?",
+                sentence,
+                re.IGNORECASE,
             )
+
             if match:
                 left_text = match.group(1).strip()
                 right_text = match.group(2).strip()
@@ -458,70 +523,141 @@ class LogicConditionParser:
                 right_vars = self._extract_variables(right_text)
 
                 if left_vars and right_vars:
-                    logger.info(
-                        f"[OK] DISJUNCTION (einzeln/gleichzeitig): {left_vars[0]} ∨ {right_vars[0]}"
+                    return LogicCondition(
+                        condition_type="NEVER_BOTH",
+                        operands=[left_vars[0], right_vars[0]],
+                        text=sentence,
                     )
+
+            return None
+        except Exception as e:
+            raise ParsingError(
+                "Fehler beim Parsen der NEVER_BOTH-Bedingung",
+                context={"sentence": sentence},
+                original_exception=e,
+            )
+
+    def _parse_conjunction(self, sentence: str) -> Optional[LogicCondition]:
+        """
+        Parst Konjunktion: "X und Y" → (X ∧ Y)
+
+        ABER: "X und Y einzeln oder gleichzeitig" → (X ∨ Y) [DISJUNCTION!]
+
+        Raises:
+            ParsingError: Wenn Variablen-Extraktion fehlschlägt
+        """
+        try:
+            # SPEZIALFALL: "X und Y einzeln oder gleichzeitig/zusammen"
+            # Bedeutung: "individually or simultaneously" = at least one = DISJUNCTION
+            if re.search(
+                r"einzeln\s+oder\s+(gleichzeitig|zusammen)", sentence, re.IGNORECASE
+            ):
+                # Parse als DISJUNCTION statt CONJUNCTION
+                match = re.search(
+                    r"(.+?)\s+und\s+(.+?)\s+einzeln\s+oder", sentence, re.IGNORECASE
+                )
+                if match:
+                    left_text = match.group(1).strip()
+                    right_text = match.group(2).strip()
+
+                    left_vars = self._extract_variables(left_text)
+                    right_vars = self._extract_variables(right_text)
+
+                    if left_vars and right_vars:
+                        logger.info(
+                            f"[OK] DISJUNCTION (einzeln/gleichzeitig): {left_vars[0]} ∨ {right_vars[0]}"
+                        )
+                        return LogicCondition(
+                            condition_type="DISJUNCTION",
+                            operands=[left_vars[0], right_vars[0]],
+                            text=sentence,
+                        )
+
+            # Standard-Pattern: "X und Y"
+            match = re.match(r"(.+?)\s+und\s+(.+)", sentence, re.IGNORECASE)
+
+            if match:
+                left_text = match.group(1).strip()
+                right_text = match.group(2).strip()
+
+                left_vars = self._extract_variables(left_text)
+                right_vars = self._extract_variables(right_text)
+
+                if left_vars and right_vars:
+                    return LogicCondition(
+                        condition_type="CONJUNCTION",
+                        operands=[left_vars[0], right_vars[0]],
+                        text=sentence,
+                    )
+
+            return None
+        except Exception as e:
+            raise ParsingError(
+                "Fehler beim Parsen der Konjunktion",
+                context={"sentence": sentence},
+                original_exception=e,
+            )
+
+    def _parse_disjunction(self, sentence: str) -> Optional[LogicCondition]:
+        """
+        Parst Disjunktion: "X oder Y" → (X ∨ Y)
+
+        Raises:
+            ParsingError: Wenn Variablen-Extraktion fehlschlägt
+        """
+        try:
+            # Pattern: "X oder Y"
+            match = re.match(r"(.+?)\s+oder\s+(.+)", sentence, re.IGNORECASE)
+
+            if match:
+                left_text = match.group(1).strip()
+                right_text = match.group(2).strip()
+
+                left_vars = self._extract_variables(left_text)
+                right_vars = self._extract_variables(right_text)
+
+                if left_vars and right_vars:
                     return LogicCondition(
                         condition_type="DISJUNCTION",
                         operands=[left_vars[0], right_vars[0]],
                         text=sentence,
                     )
 
-        # Standard-Pattern: "X und Y"
-        match = re.match(r"(.+?)\s+und\s+(.+)", sentence, re.IGNORECASE)
-
-        if match:
-            left_text = match.group(1).strip()
-            right_text = match.group(2).strip()
-
-            left_vars = self._extract_variables(left_text)
-            right_vars = self._extract_variables(right_text)
-
-            if left_vars and right_vars:
-                return LogicCondition(
-                    condition_type="CONJUNCTION",
-                    operands=[left_vars[0], right_vars[0]],
-                    text=sentence,
-                )
-
-        return None
-
-    def _parse_disjunction(self, sentence: str) -> Optional[LogicCondition]:
-        """Parst Disjunktion: "X oder Y" → (X ∨ Y)"""
-        # Pattern: "X oder Y"
-        match = re.match(r"(.+?)\s+oder\s+(.+)", sentence, re.IGNORECASE)
-
-        if match:
-            left_text = match.group(1).strip()
-            right_text = match.group(2).strip()
-
-            left_vars = self._extract_variables(left_text)
-            right_vars = self._extract_variables(right_text)
-
-            if left_vars and right_vars:
-                return LogicCondition(
-                    condition_type="DISJUNCTION",
-                    operands=[left_vars[0], right_vars[0]],
-                    text=sentence,
-                )
-
-        return None
+            return None
+        except Exception as e:
+            raise ParsingError(
+                "Fehler beim Parsen der Disjunktion",
+                context={"sentence": sentence},
+                original_exception=e,
+            )
 
     def _parse_negation(self, sentence: str) -> Optional[LogicCondition]:
-        """Parst Negation: "nicht X" → (¬X)"""
-        # Pattern: "nicht X"
-        match = re.match(r"nicht\s+(.+)", sentence, re.IGNORECASE)
+        """
+        Parst Negation: "nicht X" → (¬X)
 
-        if match:
-            text = match.group(1).strip()
-            vars = self._extract_variables(text)
+        Raises:
+            ParsingError: Wenn Variablen-Extraktion fehlschlägt
+        """
+        try:
+            # Pattern: "nicht X"
+            match = re.match(r"nicht\s+(.+)", sentence, re.IGNORECASE)
 
-            if vars:
-                return LogicCondition(
-                    condition_type="NEGATION", operands=[vars[0]], text=sentence
-                )
+            if match:
+                text = match.group(1).strip()
+                vars = self._extract_variables(text)
 
-        return None
+                if vars:
+                    return LogicCondition(
+                        condition_type="NEGATION", operands=[vars[0]], text=sentence
+                    )
+
+            return None
+        except Exception as e:
+            raise ParsingError(
+                "Fehler beim Parsen der Negation",
+                context={"sentence": sentence},
+                original_exception=e,
+            )
 
     def _extract_variables(self, text: str) -> List[str]:
         """
@@ -728,48 +864,99 @@ class LogicPuzzleSolver:
             - solution: Dict[var_name, bool] - Variable-Assignments
             - proof_tree: ProofTree - Lösungsweg
             - answer: str - Formatierte Antwort
+
+        Raises:
+            ParsingError: Wenn Bedingungen nicht geparst werden können
+            ConstraintReasoningError: Wenn SAT-Solver fehlschlägt
         """
-        logger.info(f"Löse Logik-Rätsel mit {len(entities)} Entitäten")
+        try:
+            logger.info(f"Löse Logik-Rätsel mit {len(entities)} Entitäten")
 
-        # SCHRITT 1: Parse Bedingungen
-        conditions = self.parser.parse_conditions(conditions_text, entities)
-        logger.info(f"Geparst: {len(conditions)} Bedingungen")
+            # SCHRITT 1: Parse Bedingungen
+            try:
+                conditions = self.parser.parse_conditions(conditions_text, entities)
+                logger.info(f"Geparst: {len(conditions)} Bedingungen")
+            except (ParsingError, SpaCyModelError) as e:
+                # Re-raise mit zusätzlichem Kontext
+                logger.error(f"Parsing fehlgeschlagen: {e}")
+                raise
 
-        if not conditions:
-            return {
-                "solution": {},
-                "proof_tree": None,
-                "answer": "Keine logischen Bedingungen gefunden.",
-            }
+            if not conditions:
+                logger.warning("Keine logischen Bedingungen gefunden")
+                return {
+                    "solution": {},
+                    "proof_tree": None,
+                    "answer": "Keine logischen Bedingungen gefunden.",
+                }
 
-        # SCHRITT 2: Konvertiere zu CNF
-        cnf = self._build_cnf(conditions)
-        logger.info(f"CNF erstellt: {len(cnf.clauses)} Klauseln")
+            # SCHRITT 2: Konvertiere zu CNF
+            try:
+                cnf = self._build_cnf(conditions)
+                logger.info(f"CNF erstellt: {len(cnf.clauses)} Klauseln")
+            except ConstraintReasoningError:
+                raise  # Re-raise ConstraintReasoningError from _build_cnf
+            except Exception as e:
+                raise ConstraintReasoningError(
+                    "Fehler beim Konvertieren zu CNF-Formel",
+                    context={"num_conditions": len(conditions)},
+                    original_exception=e,
+                )
 
-        # SCHRITT 3: Löse mit SAT-Solver
-        # SATSolver.solve() gibt None zurück wenn UNSAT, sonst model
-        model = self.solver.solve(cnf)
+            # SCHRITT 3: Löse mit SAT-Solver
+            try:
+                # SATSolver.solve() gibt None zurück wenn UNSAT, sonst model
+                model = self.solver.solve(cnf)
+            except Exception as e:
+                raise ConstraintReasoningError(
+                    "SAT-Solver fehlgeschlagen",
+                    context={"num_clauses": len(cnf.clauses)},
+                    original_exception=e,
+                )
 
-        if model is not None:
-            logger.info(f"[OK] Lösung gefunden: {model}")
+            if model is not None:
+                logger.info(f"[OK] Lösung gefunden: {model}")
 
-            # SCHRITT 4: Formatiere Antwort
-            answer = self._format_answer(model, question)
+                # SCHRITT 4: Formatiere Antwort
+                try:
+                    answer = self._format_answer(model, question)
+                except ConstraintReasoningError:
+                    raise  # Re-raise ConstraintReasoningError from _format_answer
+                except Exception as e:
+                    raise ConstraintReasoningError(
+                        "Fehler beim Formatieren der Antwort",
+                        context={"model_size": len(model)},
+                        original_exception=e,
+                    )
 
-            return {
-                "solution": model,
-                "proof_tree": None,  # TODO: Extract from solver if needed
-                "answer": answer,
-                "result": "SATISFIABLE",
-            }
-        else:
-            logger.warning("Rätsel ist unlösbar (UNSAT)")
-            return {
-                "solution": {},
-                "proof_tree": None,
-                "answer": "Das Rätsel hat keine Lösung (Widerspruch in den Bedingungen).",
-                "result": "UNSATISFIABLE",
-            }
+                return {
+                    "solution": model,
+                    "proof_tree": None,  # TODO: Extract from solver if needed
+                    "answer": answer,
+                    "result": "SATISFIABLE",
+                }
+            else:
+                logger.warning("Rätsel ist unlösbar (UNSAT)")
+                return {
+                    "solution": {},
+                    "proof_tree": None,
+                    "answer": "Das Rätsel hat keine Lösung (Widerspruch in den Bedingungen).",
+                    "result": "UNSATISFIABLE",
+                }
+
+        except (ParsingError, SpaCyModelError, ConstraintReasoningError):
+            raise  # Re-raise bekannte Exceptions
+        except Exception as e:
+            logger.error(
+                f"Unerwarteter Fehler in LogicPuzzleSolver.solve(): {e}", exc_info=True
+            )
+            raise ConstraintReasoningError(
+                "Unerwarteter Fehler beim Lösen des Logik-Rätsels",
+                context={
+                    "num_entities": len(entities),
+                    "text_length": len(conditions_text),
+                },
+                original_exception=e,
+            )
 
     def _build_cnf(self, conditions: List[LogicCondition]) -> CNFFormula:
         """
@@ -782,49 +969,59 @@ class LogicPuzzleSolver:
         - CONJUNCTION (X ∧ Y):  X, Y (separate Klauseln)
         - DISJUNCTION (X ∨ Y):  X ∨ Y
         - NEGATION (¬X):        ¬X
+
+        Raises:
+            ConstraintReasoningError: Wenn CNF-Konvertierung fehlschlägt
         """
-        clauses: List[Clause] = []
+        try:
+            clauses: List[Clause] = []
 
-        for cond in conditions:
-            if cond.condition_type == "IMPLICATION":
-                # X → Y = ¬X ∨ Y
-                x, y = cond.operands
-                clauses.append(
-                    Clause({Literal(x, negated=True), Literal(y, negated=False)})
-                )
+            for cond in conditions:
+                if cond.condition_type == "IMPLICATION":
+                    # X → Y = ¬X ∨ Y
+                    x, y = cond.operands
+                    clauses.append(
+                        Clause({Literal(x, negated=True), Literal(y, negated=False)})
+                    )
 
-            elif cond.condition_type == "XOR":
-                # X ⊕ Y = (X ∨ Y) ∧ (¬X ∨ ¬Y)
-                x, y = cond.operands
-                clauses.append(Clause({Literal(x), Literal(y)}))  # X ∨ Y
-                clauses.append(
-                    Clause({Literal(x, negated=True), Literal(y, negated=True)})
-                )  # ¬X ∨ ¬Y
+                elif cond.condition_type == "XOR":
+                    # X ⊕ Y = (X ∨ Y) ∧ (¬X ∨ ¬Y)
+                    x, y = cond.operands
+                    clauses.append(Clause({Literal(x), Literal(y)}))  # X ∨ Y
+                    clauses.append(
+                        Clause({Literal(x, negated=True), Literal(y, negated=True)})
+                    )  # ¬X ∨ ¬Y
 
-            elif cond.condition_type == "NEVER_BOTH":
-                # ¬(X ∧ Y) = ¬X ∨ ¬Y
-                x, y = cond.operands
-                clauses.append(
-                    Clause({Literal(x, negated=True), Literal(y, negated=True)})
-                )
+                elif cond.condition_type == "NEVER_BOTH":
+                    # ¬(X ∧ Y) = ¬X ∨ ¬Y
+                    x, y = cond.operands
+                    clauses.append(
+                        Clause({Literal(x, negated=True), Literal(y, negated=True)})
+                    )
 
-            elif cond.condition_type == "CONJUNCTION":
-                # X ∧ Y = X, Y (zwei separate Klauseln)
-                x, y = cond.operands
-                clauses.append(Clause({Literal(x)}))
-                clauses.append(Clause({Literal(y)}))
+                elif cond.condition_type == "CONJUNCTION":
+                    # X ∧ Y = X, Y (zwei separate Klauseln)
+                    x, y = cond.operands
+                    clauses.append(Clause({Literal(x)}))
+                    clauses.append(Clause({Literal(y)}))
 
-            elif cond.condition_type == "DISJUNCTION":
-                # X ∨ Y
-                x, y = cond.operands
-                clauses.append(Clause({Literal(x), Literal(y)}))
+                elif cond.condition_type == "DISJUNCTION":
+                    # X ∨ Y
+                    x, y = cond.operands
+                    clauses.append(Clause({Literal(x), Literal(y)}))
 
-            elif cond.condition_type == "NEGATION":
-                # ¬X
-                x = cond.operands[0]
-                clauses.append(Clause({Literal(x, negated=True)}))
+                elif cond.condition_type == "NEGATION":
+                    # ¬X
+                    x = cond.operands[0]
+                    clauses.append(Clause({Literal(x, negated=True)}))
 
-        return CNFFormula(clauses)
+            return CNFFormula(clauses)
+        except Exception as e:
+            raise ConstraintReasoningError(
+                "Fehler beim Konvertieren zu CNF-Formel",
+                context={"num_conditions": len(conditions)},
+                original_exception=e,
+            )
 
     def _format_answer(self, model: Dict[str, bool], question: Optional[str]) -> str:
         """
@@ -836,24 +1033,36 @@ class LogicPuzzleSolver:
 
         Returns:
             Formatierte Antwort
+
+        Raises:
+            ConstraintReasoningError: Wenn Answer-Formatierung fehlschlägt
         """
-        # Finde alle TRUE Variablen
-        true_vars = [var for var, value in model.items() if value]
+        try:
+            # Finde alle TRUE Variablen
+            true_vars = [var for var, value in model.items() if value]
 
-        if not true_vars:
-            return "Keine der Bedingungen ist erfüllt."
+            if not true_vars:
+                return "Keine der Bedingungen ist erfüllt."
 
-        # Formatiere Variablen als Sätze
-        # Beispiel: "Leo_bestellt_brandy" → "Leo bestellt Brandy"
-        statements = []
-        for var_name in true_vars:
-            var = self.parser.get_variable(var_name)
-            if var:
-                # Konvertiere Property zurück zu Natürlichsprache
-                property_text = var.property.replace("_", " ")
-                statements.append(f"{var.entity} {property_text}")
+            # Formatiere Variablen als Sätze
+            # Beispiel: "Leo_bestellt_brandy" → "Leo bestellt Brandy"
+            statements = []
+            for var_name in true_vars:
+                var = self.parser.get_variable(var_name)
+                if var:
+                    # Konvertiere Property zurück zu Natürlichsprache
+                    property_text = var.property.replace("_", " ")
+                    statements.append(f"{var.entity} {property_text}")
 
-        if len(statements) == 1:
-            return statements[0].capitalize()
-        else:
-            return ", ".join(statements[:-1]) + " und " + statements[-1]
+            if len(statements) == 1:
+                return statements[0].capitalize()
+            else:
+                return ", ".join(statements[:-1]) + " und " + statements[-1]
+        except Exception as e:
+            raise ConstraintReasoningError(
+                "Fehler beim Formatieren der Antwort",
+                context={
+                    "num_true_vars": len(true_vars) if "true_vars" in locals() else 0
+                },
+                original_exception=e,
+            )

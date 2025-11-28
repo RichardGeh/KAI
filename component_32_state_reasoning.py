@@ -15,10 +15,12 @@ reasoning tasks requiring state transitions (puzzles, planning, etc.).
 """
 
 import copy
-import logging
 from dataclasses import dataclass, field
 from heapq import heappop, heappush
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
+
+# Import centralized logging
+from component_15_logging_config import get_logger
 
 # Import proof structures for explanations
 from component_17_proof_explanation import ProofStep, ProofTree, StepType
@@ -26,7 +28,30 @@ from component_17_proof_explanation import ProofStep, ProofTree, StepType
 # Import constraint solver for state validation
 from component_29_constraint_reasoning import ConstraintSolver, Variable
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+
+def safe_str(obj: Any) -> str:
+    """
+    Convert object to cp1252-safe string for Windows compatibility.
+
+    Replaces characters that cannot be encoded in Windows cp1252 to prevent
+    UnicodeEncodeError in logging and console output.
+
+    Args:
+        obj: Object to convert to string
+
+    Returns:
+        cp1252-safe string representation
+    """
+    s = str(obj)
+    try:
+        # Test if string can be encoded in cp1252
+        s.encode("cp1252")
+        return s
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        # Replace problematic characters
+        return s.encode("cp1252", errors="replace").decode("cp1252")
 
 
 @dataclass
@@ -80,17 +105,29 @@ class State:
             return False
         return self.properties == other.properties
 
+    def _make_hashable(self, obj: Any) -> Any:
+        """
+        Recursively convert object to hashable type.
+
+        Handles nested structures (lists of dicts, dicts of lists, etc.)
+        to prevent TypeError when hashing states with complex properties.
+        """
+        if isinstance(obj, dict):
+            return tuple(sorted((k, self._make_hashable(v)) for k, v in obj.items()))
+        elif isinstance(obj, list):
+            return tuple(self._make_hashable(item) for item in obj)
+        elif isinstance(obj, set):
+            return frozenset(self._make_hashable(item) for item in obj)
+        else:
+            return obj
+
     def __hash__(self) -> int:
         """Hash based on properties (for use in sets/dicts)."""
         # Convert dict to sorted tuple of items for hashing
-        # Handle unhashable types (like lists) by converting to tuples
+        # Handle unhashable types (like lists) by converting to tuples recursively
         hashable_items = []
         for k, v in sorted(self.properties.items()):
-            if isinstance(v, list):
-                v = tuple(v)
-            elif isinstance(v, dict):
-                v = tuple(sorted(v.items()))
-            hashable_items.append((k, v))
+            hashable_items.append((k, self._make_hashable(v)))
         return hash(tuple(hashable_items))
 
     def __lt__(self, other: "State") -> bool:
@@ -148,16 +185,23 @@ class Action:
             state: The state to transform
 
         Returns:
-            New state after applying effects, or None if not applicable
+            New state after applying effects, or None if not applicable or effects fail
         """
         if not self.is_applicable(state):
             logger.debug(f"Action {self.name} not applicable to {state}")
             return None
 
-        # Apply all effects sequentially
+        # Apply all effects sequentially with error handling
         new_state = state.copy()
-        for effect in self.effects:
-            new_state = effect(new_state)
+        for i, effect in enumerate(self.effects):
+            try:
+                new_state = effect(new_state)
+            except Exception as e:
+                logger.error(
+                    f"Effect function {i} failed in action '{self.name}': {e}",
+                    exc_info=True,
+                )
+                return None  # Signal failure instead of crashing
 
         return new_state
 
@@ -346,10 +390,10 @@ class StateSpacePlanner:
                     ProofStep(
                         step_id=f"plan_{iterations}_{action.name}",
                         step_type=StepType.RULE_APPLICATION,
-                        inputs=[str(current_state)],
-                        rule_name=action.name,
-                        output=str(new_state),
-                        explanation_text=f"Applied {action.name}: {current_state} -> {new_state}",
+                        inputs=[safe_str(current_state)],
+                        rule_name=safe_str(action.name),
+                        output=safe_str(new_state),
+                        explanation_text=f"Applied {safe_str(action.name)}: {safe_str(current_state)} -> {safe_str(new_state)}",
                         confidence=1.0
                         / (1.0 + action.cost),  # Lower cost = higher confidence
                         source_component="state_planner",
@@ -533,10 +577,10 @@ class StateSpacePlanner:
                     ProofStep(
                         step_id=f"bfs_{depth}_{action.name}",
                         step_type=StepType.RULE_APPLICATION,
-                        inputs=[str(current_state)],
-                        rule_name=action.name,
-                        output=str(new_state),
-                        explanation_text=f"BFS: {action.name}: {current_state} -> {new_state}",
+                        inputs=[safe_str(current_state)],
+                        rule_name=safe_str(action.name),
+                        output=safe_str(new_state),
+                        explanation_text=f"BFS: {safe_str(action.name)}: {safe_str(current_state)} -> {safe_str(new_state)}",
                         confidence=1.0,
                         source_component="state_planner_bfs",
                     )
@@ -640,6 +684,8 @@ def create_simple_action(
 
 if __name__ == "__main__":
     # Example: Simple navigation planning
+    import logging
+
     logging.basicConfig(level=logging.INFO)
 
     # Define states

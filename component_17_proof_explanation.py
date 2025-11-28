@@ -88,6 +88,11 @@ class ProofStep:
     source_component: str = "unknown"
     subgoals: List["ProofStep"] = field(default_factory=list)
 
+    def __post_init__(self):
+        """Validate fields after initialization"""
+        if not 0.0 <= self.confidence <= 1.0:
+            raise ValueError(f"Confidence must be in [0.0, 1.0], got {self.confidence}")
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for serialization"""
         return {
@@ -107,15 +112,90 @@ class ProofStep:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any]) -> "ProofStep":
-        """Create ProofStep from dictionary"""
-        data_copy = data.copy()
-        data_copy["step_type"] = StepType(data_copy["step_type"])
-        data_copy["timestamp"] = datetime.fromisoformat(data_copy["timestamp"])
-        data_copy["subgoals"] = [
-            cls.from_dict(sg) for sg in data_copy.get("subgoals", [])
-        ]
-        return cls(**data_copy)
+    def from_dict(cls, data: Dict[str, Any], _depth: int = 0) -> "ProofStep":
+        """
+        Create ProofStep from dictionary with validation.
+
+        Args:
+            data: Dictionary to deserialize
+            _depth: Internal recursion depth counter
+
+        Returns:
+            Deserialized ProofStep
+
+        Raises:
+            ValueError: If data is invalid or malformed
+        """
+        if not isinstance(data, dict):
+            raise ValueError(f"Expected dict, got {type(data).__name__}")
+
+        # Validate required fields
+        if "step_id" not in data:
+            raise ValueError("Missing required field: step_id")
+        if "step_type" not in data:
+            raise ValueError("Missing required field: step_type")
+
+        # Protect against deep recursion (DoS attack prevention)
+        MAX_RECURSION_DEPTH = 50
+        if _depth > MAX_RECURSION_DEPTH:
+            raise ValueError(
+                f"Subgoal nesting too deep (max {MAX_RECURSION_DEPTH} levels)"
+            )
+
+        try:
+            data_copy = data.copy()
+
+            # Safe StepType conversion
+            step_type_str = data_copy.get("step_type", "")
+            try:
+                data_copy["step_type"] = StepType(step_type_str)
+            except ValueError:
+                raise ValueError(f"Invalid step_type: '{step_type_str}'")
+
+            # Safe timestamp conversion
+            timestamp_str = data_copy.get("timestamp")
+            if timestamp_str:
+                try:
+                    data_copy["timestamp"] = datetime.fromisoformat(timestamp_str)
+                except (ValueError, TypeError) as e:
+                    raise ValueError(
+                        f"Invalid timestamp format: '{timestamp_str}'"
+                    ) from e
+
+            # Recursively deserialize subgoals with depth tracking
+            subgoals_data = data_copy.get("subgoals", [])
+            if not isinstance(subgoals_data, list):
+                raise ValueError("subgoals must be a list")
+
+            data_copy["subgoals"] = [
+                cls.from_dict(sg, _depth=_depth + 1) for sg in subgoals_data
+            ]
+
+            # Filter out unexpected keys to prevent TypeError
+            valid_keys = {
+                "step_id",
+                "step_type",
+                "inputs",
+                "rule_name",
+                "output",
+                "confidence",
+                "explanation_text",
+                "parent_steps",
+                "bindings",
+                "metadata",
+                "timestamp",
+                "source_component",
+                "subgoals",
+            }
+            filtered_data = {k: v for k, v in data_copy.items() if k in valid_keys}
+
+            return cls(**filtered_data)
+
+        except ValueError:
+            # Re-raise ValueError as-is
+            raise
+        except Exception as e:
+            raise ValueError(f"Failed to deserialize ProofStep: {e}") from e
 
     def add_subgoal(self, subgoal: "ProofStep") -> None:
         """Add a subgoal/child step"""
@@ -232,13 +312,32 @@ class ProofTree:
     root_steps: List[ProofStep] = field(default_factory=list)
     metadata: Dict[str, Any] = field(default_factory=dict)
     created_at: datetime = field(default_factory=datetime.now)
+    _steps_cache: Optional[List[ProofStep]] = field(
+        default=None, init=False, repr=False
+    )
+    _step_index: Dict[str, ProofStep] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def add_root_step(self, step: ProofStep) -> None:
-        """Add a top-level proof step"""
+        """Add a top-level proof step and invalidate cache"""
         self.root_steps.append(step)
+        # Invalidate cache
+        self._steps_cache = None
+        # Index this step and all descendants
+        self._index_step(step)
+
+    def _index_step(self, step: ProofStep) -> None:
+        """Recursively index step and subgoals for O(1) lookup"""
+        self._step_index[step.step_id] = step
+        for subgoal in step.subgoals:
+            self._index_step(subgoal)
 
     def get_all_steps(self) -> List[ProofStep]:
-        """Get all proof steps (flattened)"""
+        """Get all proof steps (flattened, cached)"""
+        if self._steps_cache is not None:
+            return self._steps_cache
+
         all_steps = []
 
         def collect_steps(step: ProofStep) -> None:
@@ -249,14 +348,12 @@ class ProofTree:
         for root in self.root_steps:
             collect_steps(root)
 
+        self._steps_cache = all_steps
         return all_steps
 
     def get_step_by_id(self, step_id: str) -> Optional[ProofStep]:
-        """Find a step by its ID"""
-        for step in self.get_all_steps():
-            if step.step_id == step_id:
-                return step
-        return None
+        """Find a step by its ID (O(1) lookup via index)"""
+        return self._step_index.get(step_id)
 
     def to_tree_nodes(self) -> List[ProofTreeNode]:
         """
@@ -440,11 +537,48 @@ def generate_explanation_text(
         num_subgoals = len(metadata.get("subgoals", [])) if metadata else 0
         return f"Zerlegte Ziel in {num_subgoals} Unterziele"
 
-    else:  # step_type == StepType.UNIFICATION
+    elif step_type == StepType.PREMISE:
+        return f"Gegeben: {output}"
+
+    elif step_type == StepType.ASSUMPTION:
+        return f"Annahme: {output}"
+
+    elif step_type == StepType.CONCLUSION:
+        return f"Schlussfolgerung: {output}"
+
+    elif step_type == StepType.CONTRADICTION:
+        return f"Widerspruch erkannt: {output}"
+
+    elif step_type == StepType.SPATIAL_MODEL_CREATION:
+        model_type = (
+            metadata.get("model_type", "unbekannt") if metadata else "unbekannt"
+        )
+        return f"Erstelle räumliches Modell ({model_type}): {output}"
+
+    elif step_type == StepType.SPATIAL_CONSTRAINT_SOLVING:
+        num_constraints = metadata.get("num_constraints", "?") if metadata else "?"
+        return f"Löse {num_constraints} räumliche Constraints: {output}"
+
+    elif step_type == StepType.SPATIAL_PLANNING:
+        path_length = metadata.get("path_length", "?") if metadata else "?"
+        return f"Plane Pfad (Länge: {path_length}): {output}"
+
+    elif step_type == StepType.SPATIAL_RELATION_CHECK:
+        relation = metadata.get("relation", "unbekannt") if metadata else "unbekannt"
+        return f"Prüfe räumliche Relation '{relation}': {output}"
+
+    elif step_type == StepType.SPATIAL_TRANSITIVE_INFERENCE:
+        return f"Transitive räumliche Inferenz: {output}"
+
+    elif step_type == StepType.UNIFICATION:
         if bindings:
             bindings_str = ", ".join(f"{k}={v}" for k, v in bindings.items())
             return f"Unifizierte Variablen: {bindings_str}"
         return "Unifizierte Variablen"
+
+    else:
+        # Fallback for unknown/future types
+        return f"Schritt ({step_type.value}): {output}"
 
 
 # ==================== Conversion Utilities ====================
@@ -500,25 +634,35 @@ def convert_reasoning_state(reasoning_state: Any) -> ProofStep:
 
 
 def _get_step_icon(step_type: StepType) -> str:
-    """Get icon for step type"""
+    """Get icon for step type (cp1252-safe)"""
     icons = {
         StepType.FACT_MATCH: "[INFO]",
-        StepType.RULE_APPLICATION: "⚙️",
-        StepType.INFERENCE: "💡",
-        StepType.HYPOTHESIS: "🔬",
-        StepType.GRAPH_TRAVERSAL: "🗺️",
-        StepType.PROBABILISTIC: "🎲",
-        StepType.DECOMPOSITION: "🔀",
-        StepType.UNIFICATION: "🔗",
+        StepType.RULE_APPLICATION: "[REGEL]",
+        StepType.INFERENCE: "[FOLGERUNG]",
+        StepType.HYPOTHESIS: "[HYPOTHESE]",
+        StepType.GRAPH_TRAVERSAL: "[GRAPH]",
+        StepType.PROBABILISTIC: "[WAHRSCH]",
+        StepType.DECOMPOSITION: "[ZERLEGUNG]",
+        StepType.UNIFICATION: "[UNIFIKATION]",
+        StepType.PREMISE: "[PRAEMISSE]",
+        StepType.ASSUMPTION: "[ANNAHME]",
+        StepType.CONCLUSION: "[SCHLUSS]",
+        StepType.CONTRADICTION: "[WIDERSPRUCH]",
+        # Spatial reasoning types
+        StepType.SPATIAL_MODEL_CREATION: "[RAUM-MODELL]",
+        StepType.SPATIAL_CONSTRAINT_SOLVING: "[RAUM-CSP]",
+        StepType.SPATIAL_PLANNING: "[RAUM-PLAN]",
+        StepType.SPATIAL_RELATION_CHECK: "[RAUM-PRUEF]",
+        StepType.SPATIAL_TRANSITIVE_INFERENCE: "[RAUM-TRANS]",
     }
-    return icons.get(step_type, "*")
+    return icons.get(step_type, "[SCHRITT]")
 
 
 def _confidence_bar(confidence: float, width: int = 10) -> str:
-    """Generate visual confidence bar"""
+    """Generate visual confidence bar (cp1252-safe)"""
     filled = int(confidence * width)
     empty = width - filled
-    return f"[{'█' * filled}{'░' * empty}]"
+    return f"[{'#' * filled}{'.' * empty}]"
 
 
 # ==================== Hybrid Reasoning Integration ====================
@@ -756,23 +900,109 @@ def merge_proof_trees(trees: List[ProofTree], query: str) -> ProofTree:
 
 
 def export_proof_to_json(tree: ProofTree, filepath: str) -> None:
-    """Export proof tree to JSON file"""
-    with open(filepath, "w", encoding="utf-8") as f:
-        json.dump(tree.to_dict(), f, indent=2, ensure_ascii=False)
+    """
+    Export proof tree to JSON file with error handling.
+
+    Args:
+        tree: ProofTree to export
+        filepath: Destination file path
+
+    Raises:
+        ValueError: If filepath is invalid
+        IOError: If file cannot be written
+        TypeError: If tree contains non-serializable data
+    """
+    import os
+    from pathlib import Path
+
+    # Validate input
+    if not filepath:
+        raise ValueError("Filepath cannot be empty")
+
+    # Ensure directory exists
+    filepath_obj = Path(filepath)
+    try:
+        filepath_obj.parent.mkdir(parents=True, exist_ok=True)
+    except (OSError, PermissionError) as e:
+        raise IOError(f"Cannot create directory for {filepath}: {e}") from e
+
+    # Check write permissions (if file exists)
+    if filepath_obj.exists() and not os.access(filepath, os.W_OK):
+        raise PermissionError(f"No write permission for {filepath}")
+
+    try:
+        # Serialize to dict first (validate before writing)
+        tree_dict = tree.to_dict()
+
+        # Write to file
+        with open(filepath, "w", encoding="utf-8") as f:
+            json.dump(tree_dict, f, indent=2, ensure_ascii=False)
+
+    except TypeError as e:
+        raise TypeError(f"ProofTree contains non-serializable data: {e}") from e
+    except IOError as e:
+        raise IOError(f"Failed to write to {filepath}: {e}") from e
 
 
 def import_proof_from_json(filepath: str) -> ProofTree:
-    """Import proof tree from JSON file"""
-    with open(filepath, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    """
+    Import proof tree from JSON file with error handling.
 
-    tree = ProofTree(
-        query=data["query"],
-        metadata=data.get("metadata", {}),
-        created_at=datetime.fromisoformat(data["created_at"]),
-    )
+    Args:
+        filepath: Source file path
 
-    for root_data in data["root_steps"]:
-        tree.add_root_step(ProofStep.from_dict(root_data))
+    Returns:
+        Deserialized ProofTree
 
-    return tree
+    Raises:
+        FileNotFoundError: If file doesn't exist
+        ValueError: If JSON is malformed or invalid
+        PermissionError: If file cannot be read
+    """
+    import os
+    from pathlib import Path
+
+    filepath_obj = Path(filepath)
+
+    # Validate file exists
+    if not filepath_obj.exists():
+        raise FileNotFoundError(f"Proof file not found: {filepath}")
+
+    # Check read permissions
+    if not os.access(filepath, os.R_OK):
+        raise PermissionError(f"No read permission for {filepath}")
+
+    try:
+        with open(filepath, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in {filepath}: {e}") from e
+    except IOError as e:
+        raise IOError(f"Failed to read {filepath}: {e}") from e
+
+    # Validate required fields
+    if not isinstance(data, dict):
+        raise ValueError(
+            f"Invalid proof file: expected dict, got {type(data).__name__}"
+        )
+    if "query" not in data:
+        raise ValueError("Invalid proof file: missing 'query' field")
+    if "root_steps" not in data:
+        raise ValueError("Invalid proof file: missing 'root_steps' field")
+
+    try:
+        tree = ProofTree(
+            query=data["query"],
+            metadata=data.get("metadata", {}),
+            created_at=datetime.fromisoformat(
+                data.get("created_at", datetime.now().isoformat())
+            ),
+        )
+
+        for root_data in data["root_steps"]:
+            tree.add_root_step(ProofStep.from_dict(root_data))
+
+        return tree
+
+    except Exception as e:
+        raise ValueError(f"Failed to deserialize proof tree: {e}") from e

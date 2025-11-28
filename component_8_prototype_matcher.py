@@ -1,4 +1,6 @@
 # component_8_prototype_matcher.py
+# Unicode Policy: ASCII-only (NO Unicode symbols incompatible with Windows cp1252)
+# Use: [OK], [FEHLER], ->, !=, <=, >=, AND, OR, NOT instead of Unicode symbols
 import logging
 from typing import Any, Optional
 
@@ -16,6 +18,9 @@ logger = get_logger(__name__)
 # Clustern zugeordnet werden.
 # HINWEIS: Angepasst für 384-dimensionale semantische Vektoren (vorher: 8D Featurizer)
 NOVELTY_THRESHOLD = 15.0
+
+# Expected embedding dimensionality (validation against model changes)
+EXPECTED_EMBEDDING_DIM = 384
 
 
 class PrototypingEngine:
@@ -78,7 +83,7 @@ class PrototypingEngine:
 
         return prototypes
 
-    def _invalidate_cache(self):
+    def _invalidate_cache(self) -> None:
         """
         Invalidiert den Prototyp-Cache.
 
@@ -100,14 +105,11 @@ class PrototypingEngine:
         Returns:
             Dict mit Cache-Statistiken
         """
+        total = self._cache_hits + self._cache_misses
         return {
             "cache_hits": self._cache_hits,
             "cache_misses": self._cache_misses,
-            "hit_rate": (
-                self._cache_hits / (self._cache_hits + self._cache_misses)
-                if (self._cache_hits + self._cache_misses) > 0
-                else 0.0
-            ),
+            "hit_rate": self._cache_hits / total if total > 0 else 0.0,
             "cached": self._prototype_cache is not None,
             "cached_count": (
                 len(self._prototype_cache) if self._prototype_cache is not None else 0
@@ -118,7 +120,7 @@ class PrototypingEngine:
         self, vec1: np.ndarray, vec2: np.ndarray
     ) -> float:
         """Berechnet den euklidischen Abstand zwischen zwei Numpy-Arrays."""
-        return np.linalg.norm(vec1 - vec2)
+        return float(np.linalg.norm(vec1 - vec2))
 
     def get_embedding_for_text(self, text: str) -> Optional[list[float]]:
         """
@@ -131,6 +133,10 @@ class PrototypingEngine:
             384-dimensionaler Embedding-Vektor oder None bei Fehler
         """
         try:
+            if not text or not text.strip():
+                logger.warning("Empty text provided for embedding")
+                return None
+
             embedding = self.embedding_service.get_embedding(text)
             if embedding is None or len(embedding) == 0:
                 logger.error(
@@ -138,15 +144,35 @@ class PrototypingEngine:
                     extra={"text_preview": text[:50], "text_length": len(text)},
                 )
                 return None
+
+            # Validate dimensionality
+            if len(embedding) != EXPECTED_EMBEDDING_DIM:
+                logger.error(
+                    "Embedding dimensionality mismatch",
+                    extra={
+                        "expected": EXPECTED_EMBEDDING_DIM,
+                        "actual": len(embedding),
+                        "text_preview": text[:50],
+                    },
+                )
+                return None
+
             return embedding
+        except ValueError as e:
+            logger.warning(f"Invalid input for embedding: {e}")
+            return None
+        except ConnectionError as e:
+            logger.error(f"Embedding service connection failed: {e}")
+            return None
         except Exception as e:
             logger.error(
-                "Fehler beim Erstellen des Embeddings",
+                "Unexpected error beim Erstellen des Embeddings",
                 extra={
                     "text_preview": text[:50],
                     "error": str(e),
                     "error_type": type(e).__name__,
                 },
+                exc_info=True,
             )
             return None
 
@@ -249,6 +275,21 @@ class PrototypingEngine:
                 logger.error("Leerer Vektor übergeben")
                 return None
 
+            # Validate category parameter
+            if not category or not isinstance(category, str):
+                logger.error(
+                    "Invalid category parameter",
+                    extra={"category": category, "type": type(category).__name__},
+                )
+                return None
+
+            if len(category) > 100:  # Reasonable limit
+                logger.warning(
+                    "Category name too long, truncating",
+                    extra={"original_length": len(category)},
+                )
+                category = category[:100]
+
             if not self.netzwerk or not self.netzwerk.driver:
                 logger.error(
                     "Netzwerkverbindung nicht verfügbar",
@@ -341,9 +382,7 @@ class PrototypingEngine:
             # Fall 3: Match gefunden und nah genug -> Update
             if best_match and min_distance < NOVELTY_THRESHOLD:
                 logger.info(
-                    "Found match for prototype {} with distance {:.4f}".format(
-                        best_match["id"], min_distance
-                    )
+                    f"Found match for prototype {best_match['id']} with distance {min_distance:.4f}"
                 )
                 update_success = self._update_prototype(best_match, input_vector)
                 if not update_success:
@@ -353,10 +392,8 @@ class PrototypingEngine:
             # Fall 4: Kein passender Match -> Neuer Prototyp
             else:
                 logger.info(
-                    "Novelty detected. Min distance {:.4f} >= threshold. "
-                    "Creating new prototype for category '{}'.".format(
-                        min_distance, normalized_category
-                    )
+                    f"Novelty detected. Min distance {min_distance:.4f} >= threshold. "
+                    f"Creating new prototype for category '{normalized_category}'."
                 )
                 new_id = self.netzwerk.create_pattern_prototype(
                     input_vector.tolist(), normalized_category
@@ -364,7 +401,7 @@ class PrototypingEngine:
                 if new_id:
                     # Invalidiere Cache nach Erstellung
                     self._invalidate_cache()
-                    logger.info("Created new prototype with ID: {}".format(new_id))
+                    logger.info(f"Created new prototype with ID: {new_id}")
                 else:
                     logger.error("Failed to create new prototype")
                 return new_id
@@ -393,6 +430,25 @@ class PrototypingEngine:
             if not vector:
                 logger.error("find_best_match: Leerer Vektor übergeben")
                 return None
+
+            # Validate category_filter if provided
+            if category_filter is not None:
+                if not isinstance(category_filter, str) or not category_filter.strip():
+                    logger.error(
+                        "Invalid category_filter parameter",
+                        extra={
+                            "category_filter": category_filter,
+                            "type": type(category_filter).__name__,
+                        },
+                    )
+                    return None
+
+                if len(category_filter) > 100:  # Reasonable limit
+                    logger.warning(
+                        "Category filter too long, truncating",
+                        extra={"original_length": len(category_filter)},
+                    )
+                    category_filter = category_filter[:100]
 
             if not self.netzwerk or not self.netzwerk.driver:
                 logger.error("find_best_match: Netzwerkverbindung nicht verfügbar")

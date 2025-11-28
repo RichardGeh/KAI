@@ -2,17 +2,16 @@
 """
 Arithmetische Frage-Erkennung.
 Erkennt Fragen mit arithmetischen Operationen und mathematischen Konzepten.
+
+WICHTIG: KEINE Unicode-Zeichen verwenden, die Windows cp1252 Encoding-Probleme verursachen.
+Verboten: OK FEHLER -> x / != <= >= etc.
+Erlaubt: [OK] [FEHLER] -> * / != <= >= AND OR NOT
 """
-import uuid
 
 from spacy.tokens import Doc
 
-from component_5_linguistik_strukturen import (
-    MeaningPoint,
-    MeaningPointCategory,
-    Modality,
-    Polarity,
-)
+from component_5_linguistik_strukturen import MeaningPoint, MeaningPointCategory
+from component_7_meaning_point_factory import create_meaning_point
 from component_15_logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -113,7 +112,7 @@ class ArithmeticQuestionDetector:
             )
 
             return [
-                self._create_meaning_point(
+                create_meaning_point(
                     category=MeaningPointCategory.ARITHMETIC_QUESTION,
                     cue="auto_detect_arithmetic",
                     text_span=text,
@@ -128,44 +127,3 @@ class ArithmeticQuestionDetector:
         except Exception as e:
             logger.error(f"Fehler bei Arithmetik-Erkennung: {e}", exc_info=True)
             return None
-
-    def _create_meaning_point(self, **kwargs) -> MeaningPoint:
-        """
-        Factory-Methode zum Erstellen von MeaningPoint-Objekten mit sinnvollen Defaults.
-
-        Args:
-            **kwargs: Beliebige MeaningPoint-Attribute (überschreiben Defaults)
-
-        Returns:
-            Ein vollständig initialisiertes MeaningPoint-Objekt
-        """
-        try:
-            # Sinnvolle Defaults
-            defaults = {
-                "id": f"mp-{uuid.uuid4().hex[:6]}",
-                "modality": Modality.DECLARATIVE,
-                "polarity": Polarity.POSITIVE,
-                "confidence": 0.7,  # Konservativ, wird oft überschrieben
-                "arguments": {},
-                "span_offsets": [],
-                "source_rules": [],
-            }
-
-            # Kategorie-spezifische Modality
-            category = kwargs.get("category")
-            if category == MeaningPointCategory.QUESTION:
-                defaults["modality"] = Modality.INTERROGATIVE
-            elif category == MeaningPointCategory.COMMAND:
-                defaults["modality"] = Modality.IMPERATIVE
-            elif category == MeaningPointCategory.ARITHMETIC_QUESTION:
-                defaults["modality"] = Modality.INTERROGATIVE
-
-            # Merge mit übergebenen Parametern
-            defaults.update(kwargs)
-
-            return MeaningPoint(**defaults)
-
-        except Exception as e:
-            logger.error(f"Fehler beim Erstellen des MeaningPoints: {e}", exc_info=True)
-            # Rethrow, da ein MeaningPoint essentiell ist
-            raise

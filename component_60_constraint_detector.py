@@ -20,6 +20,36 @@ from component_15_logging_config import get_logger
 logger = get_logger(__name__)
 
 
+@dataclass(frozen=True)
+class ConstraintDetectorConfig:
+    """
+    Immutable configuration for ConstraintDetector.
+
+    Using frozen dataclass ensures thread safety by preventing modifications
+    after initialization.
+    """
+
+    min_conditional_rules: int = 2
+    confidence_threshold: float = 0.65
+
+    # Confidence calculation weights
+    max_variable_bonus: float = 0.25
+    variable_bonus_per_item: float = 0.04
+    max_constraint_bonus: float = 0.25
+    constraint_bonus_per_item: float = 0.04
+
+    def __post_init__(self):
+        """Validate configuration values."""
+        if self.min_conditional_rules < 1:
+            raise ValueError("min_conditional_rules must be >= 1")
+        if not 0.0 <= self.confidence_threshold <= 1.0:
+            raise ValueError("confidence_threshold must be [0,1]")
+        if not 0.0 <= self.max_variable_bonus <= 1.0:
+            raise ValueError("max_variable_bonus must be [0,1]")
+        if not 0.0 <= self.max_constraint_bonus <= 1.0:
+            raise ValueError("max_constraint_bonus must be [0,1]")
+
+
 @dataclass
 class LogicalVariable:
     """
@@ -88,19 +118,30 @@ class ConstraintDetector:
     - Schalter-Raetsel (welche Stellung)
     - Zuordnungs-Probleme (wer wohnt wo)
     - etc.
+
+    Thread-safe: Uses immutable frozen config to prevent race conditions.
     """
 
     def __init__(
-        self, min_conditional_rules: int = 2, confidence_threshold: float = 0.65
+        self,
+        min_conditional_rules: int = 2,
+        confidence_threshold: float = 0.65,
+        config: Optional[ConstraintDetectorConfig] = None,
     ):
         """
         Args:
-            min_conditional_rules: Mindestanzahl CONDITIONAL-Regeln um
-                                  Constraint-Problem zu erkennen (default: 2)
+            min_conditional_rules: Mindestanzahl CONDITIONAL-Regeln (default: 2)
             confidence_threshold: Minimale Confidence fuer Erkennung (default: 0.65)
+            config: Optional ConstraintDetectorConfig (overrides individual params)
         """
-        self.min_conditional_rules = min_conditional_rules
-        self.confidence_threshold = confidence_threshold
+        # Use provided config or create from parameters
+        if config is not None:
+            self.config = config
+        else:
+            self.config = ConstraintDetectorConfig(
+                min_conditional_rules=min_conditional_rules,
+                confidence_threshold=confidence_threshold,
+            )
 
         # Pattern fuer logische Operatoren (deutsch + englisch)
         # WICHTIG: "dann" ist oft optional in natuerlicher Sprache!
@@ -165,8 +206,8 @@ class ConstraintDetector:
 
         logger.info(
             f"ConstraintDetector initialisiert | "
-            f"min_rules={min_conditional_rules}, "
-            f"threshold={confidence_threshold}"
+            f"min_rules={self.config.min_conditional_rules}, "
+            f"threshold={self.config.confidence_threshold}"
         )
 
     def detect_constraint_problem(
@@ -187,11 +228,11 @@ class ConstraintDetector:
 
         logger.debug(
             f"Constraint-Detection | conditional_patterns={conditional_count}, "
-            f"threshold={self.min_conditional_rules}"
+            f"threshold={self.config.min_conditional_rules}"
         )
 
         # Pruefe ob genug CONDITIONAL-Regeln vorhanden
-        if conditional_count < self.min_conditional_rules:
+        if conditional_count < self.config.min_conditional_rules:
             logger.debug("Zu wenig CONDITIONAL-Pattern fuer Constraint-Problem")
             return None
 
@@ -208,9 +249,9 @@ class ConstraintDetector:
             conditional_count, len(variables), len(constraints)
         )
 
-        if confidence < self.confidence_threshold:
+        if confidence < self.config.confidence_threshold:
             logger.debug(
-                f"Confidence zu niedrig | {confidence:.2f} < {self.confidence_threshold}"
+                f"Confidence zu niedrig | {confidence:.2f} < {self.config.confidence_threshold}"
             )
             return None
 
@@ -391,21 +432,26 @@ class ConstraintDetector:
         - Anzahl Variablen (mindestens 2 noetig)
         - Anzahl Constraints (mindestens 2 noetig)
 
-        Neue Kalibrierung:
-        - base_conf: conditional_count / min_rules (statt / (min_rules * 2))
-        - Hoeherer Variable/Constraint-Bonus (0.03 -> 0.04 pro Item)
-        - Schwellenwert gesenkt: 0.7 -> 0.65
+        Uses config values for weights to make tuning easier and self-documenting.
         """
         if variable_count < 2 or constraint_count < 2:
             return 0.0
 
         # Base confidence basierend auf CONDITIONAL-Pattern
         # Wenn conditional_count >= min_rules: base_conf >= 1.0
-        base_conf = min(1.0, conditional_count / max(1, self.min_conditional_rules))
+        base_conf = min(
+            1.0, conditional_count / max(1, self.config.min_conditional_rules)
+        )
 
-        # Bonus fuer mehr Variablen/Constraints (hoeher als vorher)
-        variable_bonus = min(0.25, variable_count * 0.04)
-        constraint_bonus = min(0.25, constraint_count * 0.04)
+        # Bonus fuer mehr Variablen/Constraints (values from config)
+        variable_bonus = min(
+            self.config.max_variable_bonus,
+            variable_count * self.config.variable_bonus_per_item,
+        )
+        constraint_bonus = min(
+            self.config.max_constraint_bonus,
+            constraint_count * self.config.constraint_bonus_per_item,
+        )
 
         confidence = base_conf + variable_bonus + constraint_bonus
 

@@ -6,7 +6,7 @@ Erkennt häufige Tippfehler in KAI-Befehlen und schlägt Korrekturen vor.
 """
 
 from difflib import SequenceMatcher
-from typing import Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from component_15_logging_config import get_logger
 
@@ -88,13 +88,20 @@ class CommandSuggester:
         """
         Args:
             similarity_threshold: Minimale Ähnlichkeit (0.0-1.0) für Vorschläge
+
+        Raises:
+            ValueError: Wenn similarity_threshold außerhalb des gültigen Bereichs liegt
         """
+        if not 0.0 <= similarity_threshold <= 1.0:
+            raise ValueError(
+                f"similarity_threshold must be between 0.0 and 1.0, got {similarity_threshold}"
+            )
         self.similarity_threshold = similarity_threshold
         logger.info(
             "CommandSuggester initialisiert", extra={"threshold": similarity_threshold}
         )
 
-    def suggest_command(self, user_input: str) -> Optional[Dict[str, any]]:
+    def suggest_command(self, user_input: str) -> Optional[Dict[str, Any]]:
         """
         Prüft ob die Benutzereingabe ein falsch geschriebener Befehl ist.
 
@@ -223,7 +230,13 @@ class CommandSuggester:
         Returns:
             (korrekter_befehl, confidence, typo_length) oder None
         """
-        for correct_cmd, cmd_info in self.KNOWN_COMMANDS.items():
+        # Sort commands by length (longest first) to prioritize multi-word commands
+        # This ensures "lerne muster:" is checked before "lerne:"
+        sorted_commands = sorted(
+            self.KNOWN_COMMANDS.items(), key=lambda x: len(x[0]), reverse=True
+        )
+
+        for correct_cmd, cmd_info in sorted_commands:
             for typo in cmd_info["typos"]:
                 if text.startswith(typo):
                     # Hohe Confidence bei exaktem Typo-Match
@@ -287,10 +300,17 @@ _command_suggester_instance: Optional[CommandSuggester] = None
 def get_command_suggester() -> CommandSuggester:
     """
     Gibt Singleton-Instanz des CommandSuggesters zurück.
+
+    Raises:
+        RuntimeError: Wenn die Initialisierung fehlschlägt
     """
     global _command_suggester_instance
     if _command_suggester_instance is None:
-        _command_suggester_instance = CommandSuggester()
+        try:
+            _command_suggester_instance = CommandSuggester()
+        except Exception as e:
+            logger.error(f"Failed to initialize CommandSuggester: {e}")
+            raise RuntimeError("CommandSuggester initialization failed") from e
     return _command_suggester_instance
 
 

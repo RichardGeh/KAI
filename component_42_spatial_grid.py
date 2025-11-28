@@ -19,7 +19,7 @@ class Grid:
     Represents a 2D grid structure.
 
     Grids are general-purpose and not tied to specific applications.
-    They can represent chess boards, Sudoku grids, or any N×M structure.
+    They can represent chess boards, Sudoku grids, or any NxM structure.
     """
 
     width: int  # Number of columns (N)
@@ -28,12 +28,15 @@ class Grid:
     neighborhood_type: NeighborhoodType = NeighborhoodType.ORTHOGONAL
     custom_offsets: Optional[List[Tuple[int, int]]] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    _cell_data: Dict[Position, Any] = field(
+        default_factory=dict, init=False, repr=False
+    )
 
     def __post_init__(self):
         """Validate grid parameters."""
         if self.width <= 0 or self.height <= 0:
             raise ValueError(
-                f"Grid dimensions must be positive: {self.width}×{self.height}"
+                f"Grid dimensions must be positive: {self.width}x{self.height}"
             )
 
         if (
@@ -45,9 +48,6 @@ class Grid:
         # Generate default name if not provided
         if not self.name:
             object.__setattr__(self, "name", f"Grid_{self.width}x{self.height}")
-
-        # Initialize cell data storage
-        object.__setattr__(self, "_cell_data", {})
 
     @property
     def size(self) -> int:
@@ -77,16 +77,12 @@ class Grid:
 
     def set_cell_data(self, pos: Position, data: Any) -> None:
         """Set data for a specific cell in the grid. Silently ignores out-of-bounds positions."""
-        if not hasattr(self, "_cell_data"):
-            object.__setattr__(self, "_cell_data", {})
         if not self.is_valid_position(pos):
             return  # Silently ignore out-of-bounds positions
         self._cell_data[pos] = data
 
     def get_cell_data(self, pos: Position, default: Any = None) -> Any:
         """Get data for a specific cell in the grid."""
-        if not hasattr(self, "_cell_data"):
-            object.__setattr__(self, "_cell_data", {})
         return self._cell_data.get(pos, default)
 
     def get_neighbors(
@@ -107,4 +103,4 @@ class Grid:
         return [n for n in neighbors if self.is_valid_position(n)]
 
     def __str__(self) -> str:
-        return f"Grid({self.name}, {self.width}×{self.height})"
+        return f"Grid({self.name}, {self.width}x{self.height})"

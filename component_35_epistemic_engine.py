@@ -1,136 +1,170 @@
 """
 component_35_epistemic_engine.py
 
-Epistemic Logic Engine für KAI - Wissens- und Glaubensmodellierung
+Epistemic Logic Engine für KAI - Facade for Modular Architecture
 
-Implementiert modale epistemische Logik mit Multi-Agenten-Perspektiven,
-Meta-Wissen und Common Knowledge.
+This file provides backward compatibility for the refactored epistemic engine.
+The original monolithic implementation has been split into three focused modules:
+
+1. component_35_epistemic_engine_core.py (~500 lines)
+   - Core epistemic reasoning (K, M, E operators)
+   - Base data structures and state management
+   - Agent creation and management
+
+2. component_35_belief_tracker.py (~500 lines)
+   - Belief state tracking and updates
+   - Add/remove/query knowledge
+   - Group knowledge operations
+   - Consistency checking
+
+3. component_35_nested_beliefs.py (~900 lines)
+   - Nested belief structures (K^n operator)
+   - Common knowledge (C operator)
+   - Meta-knowledge propagation
+   - Graph traversal for belief paths
+
+This facade delegates all operations to the specialized modules while maintaining
+the original EpistemicEngine interface for backward compatibility.
 
 Autor: KAI Development Team
-Erstellt: 2025-11-01
+Erstellt: 2025-11-01 | Refactored: 2025-11-28 (Task 12 - Phase 4)
 """
 
-from dataclasses import dataclass, field
-from datetime import datetime
-from enum import Enum
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional
 
 from component_1_netzwerk import KonzeptNetzwerk
 from component_15_logging_config import get_logger
+from component_35_belief_tracker import BeliefTracker
+
+# Import specialized modules
+from component_35_epistemic_engine_core import (
+    Agent,
+    EpistemicEngineCore,
+    EpistemicState,
+    MetaProposition,
+    ModalOperator,
+    Proposition,
+)
+from component_35_nested_beliefs import NestedBeliefsHandler
 
 logger = get_logger(__name__)
 
 
-class ModalOperator(Enum):
-    """Modale Operatoren für epistemische Logik"""
-
-    KNOWS = "K"  # Agent knows (certainty)
-    BELIEVES = "M"  # Agent believes possible (uncertainty)
-    EVERYONE_KNOWS = "E"  # Everyone in group knows
-    COMMON = "C"  # Common knowledge in group
-
-
-@dataclass
-class Proposition:
-    """Atomare Proposition (z.B. 'has_blue_eyes', 'date_is_july_16')"""
-
-    id: str
-    content: str
-    truth_value: Optional[bool] = None
-
-
-@dataclass
-class Agent:
-    """Repräsentiert einen epistemischen Agenten"""
-
-    id: str
-    name: str
-    reasoning_capacity: int = 5  # max meta-level
-    knowledge: Set[str] = field(default_factory=set)  # Set von Proposition IDs
-
-
-@dataclass
-class EpistemicState:
-    """Vollständiger epistemischer Zustand aller Agenten"""
-
-    agents: Dict[str, Agent]  # agent_id -> Agent
-    propositions: Dict[str, Proposition]  # prop_id -> Proposition
-    knowledge_base: Dict[str, Set[str]]  # agent_id -> Set[prop_id]
-    meta_knowledge: Dict[
-        str, Dict[int, Set[str]]
-    ]  # agent_id -> level -> Set[meta_prop_id]
-    common_knowledge: Dict[str, Set[str]]  # group_id -> Set[prop_id]
-    timestamp: datetime = field(default_factory=datetime.now)
-
-
-@dataclass
-class MetaProposition:
-    """Meta-level proposition: "A knows that B knows P" """
-
-    id: str
-    observer_id: str  # A
-    subject_id: str  # B
-    proposition_id: str  # P
-    meta_level: (
-        int  # 1 = "A knows that B knows", 2 = "A knows that B knows that C knows"
-    )
-    certainty: float = 1.0
+# ============================================================================
+# Facade: EpistemicEngine
+# ============================================================================
 
 
 class EpistemicEngine:
     """
-    Hybrid Epistemic Reasoning Engine
+    Epistemic Logic Engine - Facade for Modular Architecture
 
-    Kombiniert:
-    - Neo4j Graph (Plan 2) für Persistenz und Traversal
-    - In-Memory Reasoning (Plan 3) für schnelle Modal-Operationen
+    This class provides backward compatibility with the original monolithic
+    EpistemicEngine implementation while delegating to specialized modules:
+    - EpistemicEngineCore: K, M, E operators and state management
+    - BeliefTracker: Belief updates and consistency
+    - NestedBeliefsHandler: K^n, C operators and meta-knowledge
+
+    All existing code using EpistemicEngine will continue to work without
+    modification.
+
+    Thread Safety:
+        All operations are thread-safe via delegation to thread-safe modules.
+
+    Example:
+        >>> netzwerk = KonzeptNetzwerk()
+        >>> engine = EpistemicEngine(netzwerk)
+        >>> engine.create_agent("alice", "Alice")
+        >>> engine.add_knowledge("alice", "sky_is_blue")
+        >>> engine.K("alice", "sky_is_blue")
+        True
     """
 
     def __init__(self, netzwerk: KonzeptNetzwerk):
-        self.netzwerk = netzwerk
-        self.current_state: Optional[EpistemicState] = None
-        self._proposition_cache: Dict[str, Proposition] = {}
-        self._agent_cache: Dict[str, Agent] = {}
-        logger.info("EpistemicEngine initialisiert")
+        """
+        Initialize epistemic engine facade.
 
-    def load_state_from_graph(self) -> EpistemicState:
+        Args:
+            netzwerk: KonzeptNetzwerk instance for Neo4j access
+
+        Raises:
+            ValueError: If netzwerk is None
+        """
+        if netzwerk is None:
+            raise ValueError("netzwerk cannot be None")
+
+        self.netzwerk = netzwerk
+
+        # Initialize core engine
+        self._core = EpistemicEngineCore(netzwerk)
+
+        # Initialize belief tracker (shares state with core)
+        self._belief_tracker = BeliefTracker(netzwerk, self._core.current_state)
+
+        # Initialize nested beliefs handler (needs references to core/tracker methods)
+        self._nested_beliefs = NestedBeliefsHandler(
+            netzwerk,
+            k_operator_func=self._core.K,
+            add_knowledge_func=self._belief_tracker.add_knowledge,
+            add_nested_knowledge_func=None,  # Set below to avoid circular ref
+        )
+
+        # Set recursive reference for nested knowledge
+        self._nested_beliefs._add_nested_knowledge_ref = (
+            self._nested_beliefs.add_nested_knowledge
+        )
+
+        logger.info(
+            "EpistemicEngine facade initialized (modular architecture)",
+            extra={
+                "modules": [
+                    "EpistemicEngineCore",
+                    "BeliefTracker",
+                    "NestedBeliefsHandler",
+                ]
+            },
+        )
+
+    # ========================================================================
+    # State Management (from Core)
+    # ========================================================================
+
+    @property
+    def current_state(self) -> Optional[EpistemicState]:
+        """Get current epistemic state"""
+        return self._core.current_state
+
+    @current_state.setter
+    def current_state(self, state: Optional[EpistemicState]) -> None:
+        """Set current epistemic state"""
+        self._core.current_state = state
+        self._belief_tracker.current_state = state  # Keep tracker in sync
+
+    def clear_cache(self) -> None:
+        """Clear all TTL caches (useful for testing or after bulk updates)"""
+        self._core.clear_cache()
+
+    def load_state_from_graph(self) -> Optional[EpistemicState]:
         """Lädt aktuellen epistemischen Zustand aus Neo4j"""
-        # TODO: Implementiere in Phase 2
+        return self._core.load_state_from_graph()
 
     def persist_state_to_graph(self, state: EpistemicState) -> bool:
         """Persistiert epistemischen Zustand nach Neo4j"""
-        # TODO: Implementiere in Phase 2
+        return self._core.persist_state_to_graph(state)
 
     def create_agent(
         self, agent_id: str, name: str, reasoning_capacity: int = 5
     ) -> Agent:
         """Erstelle neuen Agenten (in-memory + graph)"""
-        agent = Agent(id=agent_id, name=name, reasoning_capacity=reasoning_capacity)
-        self._agent_cache[agent_id] = agent
-        # Persistiere zu Neo4j
-        self.netzwerk.create_agent(agent_id, name, reasoning_capacity)
-        logger.debug(f"Agent erstellt: {agent_id}")
-        return agent
+        return self._core.create_agent(agent_id, name, reasoning_capacity)
 
-    def _ensure_state(self) -> None:
-        """Ensure current_state is initialized"""
-        if self.current_state is None:
-            self.current_state = EpistemicState(
-                agents={},
-                propositions={},
-                knowledge_base={},
-                meta_knowledge={},
-                common_knowledge={},
-            )
-            logger.debug("EpistemicState initialisiert")
+    # ========================================================================
+    # Core Modal Operators (from Core)
+    # ========================================================================
 
     def K(self, agent_id: str, proposition_id: str) -> bool:
         """
         Modal Operator K: "Agent knows proposition"
-
-        Checks:
-        1. In-memory cache (fast path)
-        2. Neo4j graph (authoritative)
 
         Args:
             agent_id: ID des Agenten
@@ -139,83 +173,11 @@ class EpistemicEngine:
         Returns:
             True wenn Agent die Proposition kennt
         """
-        # Fast path: Check cache
-        if self.current_state:
-            if agent_id in self.current_state.knowledge_base:
-                if proposition_id in self.current_state.knowledge_base[agent_id]:
-                    logger.debug(
-                        f"K({agent_id}, {proposition_id}) = True (cache)",
-                        extra={"agent_id": agent_id, "proposition_id": proposition_id},
-                    )
-                    return True
-
-        # Authoritative: Query Neo4j
-        with self.netzwerk.driver.session(database="neo4j") as session:
-            result = session.run(
-                """
-                MATCH (a:Agent {id: $agent_id})-[:KNOWS]->(b:Belief {proposition: $prop_id})
-                RETURN count(b) > 0 AS knows
-                """,
-                agent_id=agent_id,
-                prop_id=proposition_id,
-            )
-
-            record = result.single()
-            knows = record["knows"] if record else False
-
-            logger.debug(
-                f"K({agent_id}, {proposition_id}) = {knows} (graph)",
-                extra={
-                    "agent_id": agent_id,
-                    "proposition_id": proposition_id,
-                    "knows": knows,
-                },
-            )
-            return knows
-
-    def add_knowledge(
-        self, agent_id: str, proposition_id: str, certainty: float = 1.0
-    ) -> bool:
-        """
-        Füge Wissen zu Agent hinzu (updates cache + graph)
-
-        Args:
-            agent_id: ID des Agenten
-            proposition_id: ID der Proposition
-            certainty: Gewissheit (0.0 - 1.0, default: 1.0)
-
-        Returns:
-            True bei Erfolg, False bei Fehler
-        """
-        # Ensure state is initialized
-        self._ensure_state()
-
-        # Update cache
-        if agent_id not in self.current_state.knowledge_base:
-            self.current_state.knowledge_base[agent_id] = set()
-        self.current_state.knowledge_base[agent_id].add(proposition_id)
-
-        # Update graph
-        success = self.netzwerk.add_belief(agent_id, proposition_id, certainty)
-
-        if success:
-            logger.info(
-                f"Knowledge added: {agent_id} knows {proposition_id}",
-                extra={
-                    "agent_id": agent_id,
-                    "proposition_id": proposition_id,
-                    "certainty": certainty,
-                },
-            )
-
-        return success
+        return self._core.K(agent_id, proposition_id)
 
     def M(self, agent_id: str, proposition_id: str) -> bool:
         """
         Modal Operator M: "Agent considers proposition possible"
-
-        In Kripke Semantics: M(p) = ¬K(¬p)
-        "Agent glaubt P ist möglich" = "Agent weiß nicht, dass ¬P wahr ist"
 
         Args:
             agent_id: ID des Agenten
@@ -224,76 +186,53 @@ class EpistemicEngine:
         Returns:
             True wenn Agent die Proposition für möglich hält
         """
-        # Erstelle negierte Proposition ID
-        negated_prop_id = f"NOT_{proposition_id}"
-
-        # M(p) = ¬K(¬p)
-        knows_negation = self.K(agent_id, negated_prop_id)
-        believes_possible = not knows_negation
-
-        logger.debug(
-            f"M({agent_id}, {proposition_id}) = {believes_possible}",
-            extra={
-                "agent_id": agent_id,
-                "proposition_id": proposition_id,
-                "negated_prop_id": negated_prop_id,
-                "knows_negation": knows_negation,
-                "believes_possible": believes_possible,
-            },
-        )
-
-        return believes_possible
-
-    def add_negated_knowledge(self, agent_id: str, proposition_id: str) -> bool:
-        """
-        Agent weiß, dass Proposition FALSCH ist
-
-        Fügt negierte Proposition "NOT_{proposition_id}" zur Knowledge Base hinzu.
-
-        Args:
-            agent_id: ID des Agenten
-            proposition_id: ID der ursprünglichen Proposition
-
-        Returns:
-            True bei Erfolg, False bei Fehler
-        """
-        negated_prop_id = f"NOT_{proposition_id}"
-        return self.add_knowledge(agent_id, negated_prop_id, certainty=1.0)
+        return self._core.M(agent_id, proposition_id)
 
     def E(self, agent_ids: List[str], proposition_id: str) -> bool:
         """
         Modal Operator E: "Everyone in group knows proposition"
 
-        E_G(p) = ∀a ∈ G: K_a(p)
-
         Args:
-            agent_ids: Liste von Agent-IDs in der Gruppe
+            agent_ids: Liste von Agent-IDs
             proposition_id: ID der Proposition
 
         Returns:
             True wenn ALLE Agenten die Proposition kennen
         """
-        if not agent_ids:
-            logger.warning("E() called with empty group")
-            return False
+        return self._core.E(agent_ids, proposition_id)
 
-        for agent_id in agent_ids:
-            if not self.K(agent_id, proposition_id):
-                logger.debug(
-                    f"E({agent_ids}, {proposition_id}) = False (agent {agent_id} doesn't know)",
-                    extra={
-                        "agent_ids": agent_ids,
-                        "proposition_id": proposition_id,
-                        "failing_agent": agent_id,
-                    },
-                )
-                return False
+    # ========================================================================
+    # Belief Management (from BeliefTracker)
+    # ========================================================================
 
-        logger.debug(
-            f"E({agent_ids}, {proposition_id}) = True",
-            extra={"agent_ids": agent_ids, "proposition_id": proposition_id},
-        )
-        return True
+    def add_knowledge(
+        self, agent_id: str, proposition_id: str, certainty: float = 1.0
+    ) -> bool:
+        """
+        Füge Wissen zu Agent hinzu
+
+        Args:
+            agent_id: ID des Agenten
+            proposition_id: ID der Proposition
+            certainty: Gewissheit (0.0 - 1.0)
+
+        Returns:
+            True bei Erfolg
+        """
+        return self._belief_tracker.add_knowledge(agent_id, proposition_id, certainty)
+
+    def add_negated_knowledge(self, agent_id: str, proposition_id: str) -> bool:
+        """
+        Agent weiß, dass Proposition FALSCH ist
+
+        Args:
+            agent_id: ID des Agenten
+            proposition_id: ID der Proposition
+
+        Returns:
+            True bei Erfolg
+        """
+        return self._belief_tracker.add_negated_knowledge(agent_id, proposition_id)
 
     def add_group_knowledge(self, agent_ids: List[str], proposition_id: str) -> bool:
         """
@@ -304,26 +243,56 @@ class EpistemicEngine:
             proposition_id: ID der Proposition
 
         Returns:
-            True wenn erfolgreich zu ALLEN Agenten hinzugefügt, False bei mindestens einem Fehler
+            True bei Erfolg
         """
-        success = True
-        for agent_id in agent_ids:
-            if not self.add_knowledge(agent_id, proposition_id):
-                success = False
-                logger.warning(
-                    f"Failed to add knowledge to {agent_id}",
-                    extra={"agent_id": agent_id, "proposition_id": proposition_id},
-                )
+        return self._belief_tracker.add_group_knowledge(agent_ids, proposition_id)
 
-        logger.info(
-            f"Group knowledge added to {len(agent_ids)} agents: {proposition_id}",
-            extra={
-                "agent_ids": agent_ids,
-                "proposition_id": proposition_id,
-                "success": success,
-            },
+    # ========================================================================
+    # Nested Beliefs & Meta-Knowledge (from NestedBeliefsHandler)
+    # ========================================================================
+
+    def K_n(
+        self,
+        observer_id: str,
+        nested_knowledge: List[str],
+        proposition_id: str,
+        _depth: int = 0,
+        _max_depth: int = 10,
+    ) -> bool:
+        """
+        K^n Operator: Nested knowledge
+
+        Args:
+            observer_id: Der äußerste Beobachter
+            nested_knowledge: Chain von Agenten
+            proposition_id: Die Basis-Proposition
+            _depth: Internal recursion depth
+            _max_depth: Maximum recursion depth
+
+        Returns:
+            True wenn verschachteltes Wissen existiert
+        """
+        return self._nested_beliefs.K_n(
+            observer_id, nested_knowledge, proposition_id, _depth, _max_depth
         )
-        return success
+
+    def add_nested_knowledge(
+        self, observer_id: str, nested_chain: List[str], proposition_id: str
+    ) -> bool:
+        """
+        Füge verschachteltes Wissen hinzu
+
+        Args:
+            observer_id: Der äußerste Beobachter
+            nested_chain: Chain von Agenten
+            proposition_id: Basis-Proposition
+
+        Returns:
+            True bei Erfolg
+        """
+        return self._nested_beliefs.add_nested_knowledge(
+            observer_id, nested_chain, proposition_id
+        )
 
     def C_simple(
         self, agent_ids: List[str], proposition_id: str, max_depth: int = 3
@@ -331,85 +300,15 @@ class EpistemicEngine:
         """
         Modal Operator C (Simple): "Common knowledge in group"
 
-        C_G(p) = E_G(p) ∧ E_G(E_G(p)) ∧ E_G(E_G(E_G(p))) ∧ ...
-
-        Vereinfachte Fixed-Point Approximation:
-        C ≈ E^max_depth (iterierte "everyone knows")
-
         Args:
             agent_ids: Gruppe von Agenten
             proposition_id: Proposition
-            max_depth: Anzahl E-Iterationen (default: 3)
+            max_depth: Anzahl E-Iterationen
 
         Returns:
             True wenn Common Knowledge approximiert erfüllt ist
         """
-        # Level 0: Everyone knows p
-        if not self.E(agent_ids, proposition_id):
-            return False
-
-        # Level 1..max_depth: Everyone knows that everyone knows (rekursiv)
-        current_prop = proposition_id
-
-        for depth in range(1, max_depth + 1):
-            # Erstelle Meta-Proposition: "Everyone knows {current_prop}"
-            meta_prop_id = f"E_LEVEL_{depth}_{current_prop}"
-
-            # Check: Wissen alle Agenten, dass "everyone knows current_prop"?
-            # (Vereinfacht: prüfe ob alle Agenten Meta-Wissen haben)
-            all_know_meta = True
-            for agent_id in agent_ids:
-                # Prüfe ob Agent Meta-Knowledge hat
-                if not self._has_meta_knowledge(
-                    agent_id, agent_ids, current_prop, depth
-                ):
-                    all_know_meta = False
-                    break
-
-            if not all_know_meta:
-                logger.debug(
-                    f"C({agent_ids}, {proposition_id}) = False at depth {depth}"
-                )
-                return False
-
-            current_prop = meta_prop_id
-
-        logger.debug(f"C({agent_ids}, {proposition_id}) = True (depth {max_depth})")
-        return True
-
-    def _has_meta_knowledge(
-        self, observer_id: str, group: List[str], prop_id: str, level: int
-    ) -> bool:
-        """Helper: Check ob Agent Meta-Knowledge auf gegebenem Level hat"""
-        # Query Neo4j für MetaBelief
-        with self.netzwerk.driver.session(database="neo4j") as session:
-            # Vereinfacht: Check ob Agent weiß, dass alle in Gruppe prop_id kennen
-            # Für jeden anderen Agent in der Gruppe prüfen, ob MetaBelief existiert
-            for subject_id in group:
-                if observer_id == subject_id:
-                    continue  # Agent muss nicht wissen, dass er selbst etwas weiß
-
-                # Prüfe ob MetaBelief (observer_id knows that subject_id knows prop_id) existiert
-                # Schema: (observer:Agent)-[:KNOWS_THAT]->(mb:MetaBelief)-[:ABOUT_AGENT]->(subject:Agent)
-                result = session.run(
-                    """
-                    MATCH (o:Agent {id: $observer_id})-[:KNOWS_THAT]->(mb:MetaBelief)-[:ABOUT_AGENT]->(s:Agent {id: $subject_id})
-                    WHERE mb.proposition = $prop_id AND mb.meta_level = $level
-                    RETURN count(mb) > 0 AS has_meta
-                    """,
-                    observer_id=observer_id,
-                    subject_id=subject_id,
-                    prop_id=prop_id,
-                    level=level,
-                )
-
-                record = result.single()
-                has_meta = record["has_meta"] if record else False
-
-                if not has_meta:
-                    return False
-
-            return True
+        return self._nested_beliefs.C_simple(agent_ids, proposition_id, max_depth)
 
     def establish_common_knowledge(
         self, agent_ids: List[str], proposition_id: str, max_depth: int = 3
@@ -417,59 +316,23 @@ class EpistemicEngine:
         """
         Etabliere Common Knowledge in Gruppe
 
-        Fügt proposition zu allen Agenten + Meta-Knowledge für alle Levels hinzu
-
         Args:
             agent_ids: Liste von Agent-IDs
             proposition_id: Proposition
-            max_depth: Maximale Meta-Level Tiefe (default: 3)
+            max_depth: Maximale Meta-Level Tiefe
 
         Returns:
             True bei Erfolg
         """
-        # Step 1: Everyone knows p (Level 0)
-        self.add_group_knowledge(agent_ids, proposition_id)
-
-        # Step 2: Create meta-knowledge entries for all levels (Level 1..max_depth)
-        # Level 1: Everyone knows that everyone knows p
-        # Level 2: Everyone knows that everyone knows that everyone knows p
-        # etc.
-        current_prop = proposition_id
-
-        for level in range(1, max_depth + 1):
-            # Für dieses Level: Jeder Agent weiß, dass jeder andere Agent current_prop kennt
-            for observer in agent_ids:
-                for subject in agent_ids:
-                    if observer != subject:
-                        # observer weiß, dass subject current_prop kennt (auf diesem Meta-Level)
-                        self.netzwerk.add_meta_belief(
-                            observer, subject, current_prop, meta_level=level
-                        )
-
-            # Für nächstes Level: Meta-Proposition wird zur neuen current_prop
-            current_prop = f"E_LEVEL_{level}_{current_prop}"
-
-        logger.info(
-            f"Common knowledge established for {len(agent_ids)} agents (depth {max_depth}): {proposition_id}",
-            extra={
-                "agent_ids": agent_ids,
-                "proposition_id": proposition_id,
-                "max_depth": max_depth,
-            },
+        return self._nested_beliefs.establish_common_knowledge(
+            agent_ids, proposition_id, max_depth
         )
-        return True
 
     def C(
         self, agent_ids: List[str], proposition_id: str, max_iterations: int = 10
     ) -> bool:
         """
         Modal Operator C (Full): Common Knowledge via Fixed-Point Iteration
-
-        Algorithm:
-          1. Start: knowledge_0 = {agents who know proposition}
-          2. Iterate: knowledge_i+1 = {agents who know that all agents in knowledge_i know}
-          3. Stop wenn Fixed-Point: knowledge_i == knowledge_i+1
-          4. Common Knowledge = (knowledge_fixedpoint == full_group)
 
         Args:
             agent_ids: Gruppe von Agenten
@@ -479,152 +342,67 @@ class EpistemicEngine:
         Returns:
             True wenn Common Knowledge erreicht
         """
-        # Empty group check
-        if not agent_ids:
-            logger.warning("C() called with empty group")
-            return False
-
-        logger.info(
-            f"Computing C({len(agent_ids)} agents, {proposition_id})",
-            extra={"agent_ids": agent_ids, "proposition_id": proposition_id},
-        )
-
-        # Initialize: Wer kennt die Proposition direkt?
-        knowledge_set = set()
-        for agent_id in agent_ids:
-            if self.K(agent_id, proposition_id):
-                knowledge_set.add(agent_id)
-
-        logger.debug(
-            f"Iteration 0: {len(knowledge_set)} agents know proposition",
-            extra={"knowledge_set": list(knowledge_set)},
-        )
-
-        # Fixed-Point Iteration
-        for iteration in range(1, max_iterations + 1):
-            # Berechne new_knowledge_set: Wer weiß, dass ALLE in knowledge_set wissen?
-            new_knowledge_set = set()
-
-            for agent_id in agent_ids:
-                # First check: Agent must be in current knowledge_set
-                # (can't have common knowledge if agent doesn't know proposition)
-                if agent_id not in knowledge_set:
-                    continue
-
-                # Second check: Weiß agent_id, dass ALLE ANDEREN in knowledge_set die Proposition kennen?
-                knows_about_all = True
-
-                for subject_id in knowledge_set:
-                    if agent_id == subject_id:
-                        continue  # Selbstwissen nicht prüfen
-
-                    # Check: agent_id weiß, dass subject_id proposition kennt
-                    if not self.K_n(agent_id, [subject_id], proposition_id):
-                        knows_about_all = False
-                        break
-
-                if knows_about_all:
-                    new_knowledge_set.add(agent_id)
-
-            logger.debug(
-                f"Iteration {iteration}: {len(new_knowledge_set)} agents have meta-knowledge",
-                extra={
-                    "iteration": iteration,
-                    "new_knowledge_set": list(new_knowledge_set),
-                },
-            )
-
-            # Fixed-Point erreicht?
-            if new_knowledge_set == knowledge_set:
-                is_common = knowledge_set == set(agent_ids)
-                logger.info(
-                    f"Fixed-point reached at iteration {iteration}",
-                    extra={
-                        "iteration": iteration,
-                        "knowledge_set": list(knowledge_set),
-                        "agent_ids": agent_ids,
-                        "is_common": is_common,
-                        "knowledge_set_size": len(knowledge_set),
-                        "agent_ids_size": len(agent_ids),
-                    },
-                )
-                return is_common
-
-            knowledge_set = new_knowledge_set
-
-            # Leere Menge = kein Common Knowledge möglich
-            if not knowledge_set:
-                logger.info("Knowledge set became empty - no common knowledge")
-                return False
-
-        logger.warning(
-            f"Max iterations {max_iterations} reached without convergence",
-            extra={
-                "max_iterations": max_iterations,
-                "final_knowledge_set": list(knowledge_set),
-            },
-        )
-        return False
+        return self._nested_beliefs.C(agent_ids, proposition_id, max_iterations)
 
     def propagate_common_knowledge(
         self, agent_ids: List[str], proposition_id: str, max_depth: int = 2
     ) -> int:
         """
-        Propagiere Common Knowledge durch Gruppe (Public Announcement)
-
-        Algorithm:
-          1. Alle Agenten lernen proposition
-          2. Alle Agenten lernen, dass alle anderen es wissen (Level 1)
-          3. Alle Agenten lernen, dass alle anderen wissen, dass alle es wissen (Level 2)
-          ... bis max_depth
+        Propagiere Common Knowledge durch Gruppe (LEGACY - use batch version)
 
         Args:
             agent_ids: Gruppe von Agenten
             proposition_id: Proposition
-            max_depth: Maximale Meta-Level Tiefe (default: 2)
+            max_depth: Maximale Meta-Level Tiefe
 
         Returns:
             Anzahl der erstellten Meta-Knowledge Nodes
         """
-        count = 0
-
-        # Level 0: Everyone learns proposition
-        for agent_id in agent_ids:
-            self.add_knowledge(agent_id, proposition_id)
-            count += 1
-
-        # Level 1: Everyone learns that everyone else knows (only if max_depth >= 1)
-        if max_depth >= 1:
-            for observer in agent_ids:
-                for subject in agent_ids:
-                    if observer != subject:
-                        self.add_nested_knowledge(observer, [subject], proposition_id)
-                        count += 1
-
-        # Level 2+: Everyone learns that everyone knows that everyone knows
-        if max_depth >= 2:
-            for observer in agent_ids:
-                for subject1 in agent_ids:
-                    if observer == subject1:
-                        continue
-                    for subject2 in agent_ids:
-                        if subject1 == subject2:
-                            continue
-                        self.add_nested_knowledge(
-                            observer, [subject1, subject2], proposition_id
-                        )
-                        count += 1
-
-        logger.info(
-            f"Common knowledge propagated: {count} knowledge nodes created",
-            extra={
-                "agent_ids": agent_ids,
-                "proposition_id": proposition_id,
-                "max_depth": max_depth,
-                "count": count,
-            },
+        return self._nested_beliefs.propagate_common_knowledge(
+            agent_ids, proposition_id, max_depth
         )
-        return count
+
+    def propagate_common_knowledge_batch(
+        self,
+        agent_ids: List[str],
+        proposition_id: str,
+        max_depth: int = 2,
+        batch_size: int = 100,
+    ) -> int:
+        """
+        Propagiere Common Knowledge mit BATCH OPERATIONS (O(1) DB queries)
+
+        Args:
+            agent_ids: Gruppe von Agenten
+            proposition_id: Proposition
+            max_depth: Maximale Meta-Level Tiefe
+            batch_size: Maximum entries per batch
+
+        Returns:
+            Anzahl der erstellten Meta-Knowledge Nodes
+        """
+        return self._nested_beliefs.propagate_common_knowledge_batch(
+            agent_ids, proposition_id, max_depth, batch_size
+        )
+
+    def query_meta_knowledge_paths(
+        self, observer_id: str, max_depth: int = 3
+    ) -> List[Dict[str, Any]]:
+        """
+        Finde alle Meta-Knowledge-Pfade ausgehend von observer
+
+        Args:
+            observer_id: ID des Beobachters
+            max_depth: Maximale Tiefe der Pfade
+
+        Returns:
+            Liste von Dicts mit path, proposition, meta_level
+        """
+        return self._nested_beliefs.query_meta_knowledge_paths(observer_id, max_depth)
+
+    # ========================================================================
+    # Internal Helper (for compatibility - delegates to nested beliefs)
+    # ========================================================================
 
     def _create_nested_signature(
         self, agent_chain: List[str], proposition_id: str
@@ -632,225 +410,47 @@ class EpistemicEngine:
         """
         Erstelle String-Signatur für verschachteltes Wissen
 
-        Baut verschachtelte K-Operatoren von innen nach außen auf.
-
         Args:
-            agent_chain: Liste von Agenten [A, B, C, ...] (äußerste zuerst)
+            agent_chain: Liste von Agenten
             proposition_id: Basis-Proposition
 
         Returns:
-            Verschachtelte Signatur, z.B. "K(bob, K(carol, p))"
-
-        Example:
-            _create_nested_signature(["bob", "carol"], "p") -> "K(bob, K(carol, p))"
+            Verschachtelte Signatur
         """
-        if not agent_chain:
-            return proposition_id
-
-        # Baue von innen nach außen: K(A, K(B, K(C, p)))
-        signature = proposition_id
-        for agent_id in reversed(agent_chain):
-            signature = f"K({agent_id}, {signature})"
-
-        logger.debug(
-            f"Created nested signature: {signature}",
-            extra={"agent_chain": agent_chain, "proposition_id": proposition_id},
+        return self._nested_beliefs._create_nested_signature(
+            agent_chain, proposition_id
         )
-        return signature
 
-    def K_n(
-        self, observer_id: str, nested_knowledge: List[str], proposition_id: str
+    def _has_meta_knowledge(
+        self, observer_id: str, group: List[str], prop_id: str, level: int
     ) -> bool:
-        """
-        K^n Operator: Nested knowledge
-
-        Prüft rekursiv verschachteltes Wissen wie:
-        - K_n("alice", ["bob"], "p") = "Alice knows that Bob knows p"
-        - K_n("alice", ["bob", "carol"], "p") = "Alice knows that Bob knows that Carol knows p"
-
-        Args:
-            observer_id: Der äußerste Beobachter (A)
-            nested_knowledge: Chain von Agenten [B, C, ...] (äußerste zuerst)
-            proposition_id: Die Basis-Proposition (p)
-
-        Returns:
-            True wenn verschachteltes Wissen existiert
-
-        Example:
-            # Bob knows secret_password
-            engine.add_knowledge("bob", "secret_password")
-
-            # Alice knows that Bob knows secret_password
-            engine.add_nested_knowledge("alice", ["bob"], "secret_password")
-
-            # Check if Alice knows that Bob knows the secret
-            engine.K_n("alice", ["bob"], "secret_password")  # Returns True
-        """
-        if not nested_knowledge:
-            # Base case: K(observer, prop)
-            return self.K(observer_id, proposition_id)
-
-        # Recursive case: K(observer, K(nested[0], ...))
-        # Query Neo4j für MetaBelief
-        next_subject = nested_knowledge[0]
-        remaining_chain = nested_knowledge[1:]
-        meta_level = len(nested_knowledge)
-
-        with self.netzwerk.driver.session(database="neo4j") as session:
-            # Erstelle Signatur für verschachteltes Wissen
-            if remaining_chain:
-                # Noch weitere Verschachtelung
-                nested_sig = self._create_nested_signature(
-                    remaining_chain, proposition_id
-                )
-            else:
-                # Innerste Ebene: subject knows proposition
-                nested_sig = f"K({next_subject}, {proposition_id})"
-
-            # Query: (observer)-[:KNOWS_THAT]->(mb:MetaBelief {meta_level: X})-[:ABOUT_AGENT]->(subject)
-            #        WHERE mb.proposition = nested_knowledge_signature
-            result = session.run(
-                """
-                MATCH (observer:Agent {id: $observer_id})-[:KNOWS_THAT]->(mb:MetaBelief)
-                WHERE mb.meta_level = $meta_level
-                  AND mb.proposition = $nested_sig
-                MATCH (mb)-[:ABOUT_AGENT]->(subject:Agent {id: $subject_id})
-                RETURN count(mb) > 0 AS has_knowledge
-                """,
-                observer_id=observer_id,
-                subject_id=next_subject,
-                meta_level=meta_level,
-                nested_sig=nested_sig,
-            )
-
-            record = result.single()
-            has_knowledge = record["has_knowledge"] if record else False
-
-            logger.debug(
-                f"K_n({observer_id}, {nested_knowledge}, {proposition_id}) = {has_knowledge}",
-                extra={
-                    "observer_id": observer_id,
-                    "nested_knowledge": nested_knowledge,
-                    "proposition_id": proposition_id,
-                    "nested_sig": nested_sig,
-                    "has_knowledge": has_knowledge,
-                },
-            )
-            return has_knowledge
-
-    def add_nested_knowledge(
-        self, observer_id: str, nested_chain: List[str], proposition_id: str
-    ) -> bool:
-        """
-        Füge verschachteltes Wissen hinzu
-
-        Erstellt MetaBelief-Nodes für verschachteltes Wissen.
-
-        Args:
-            observer_id: Der äußerste Beobachter
-            nested_chain: Chain von Agenten [B, C, ...] (äußerste zuerst)
-            proposition_id: Basis-Proposition
-
-        Returns:
-            True bei Erfolg, False bei Fehler
-
-        Example:
-            # Alice knows that Bob knows the secret
-            add_nested_knowledge("alice", ["bob"], "secret_password")
-
-            # Carol knows that Bob knows that Alice knows the secret
-            add_nested_knowledge("carol", ["bob", "alice"], "secret_password")
-        """
-        if not nested_chain:
-            # Base case: Einfaches Wissen ohne Verschachtelung
-            return self.add_knowledge(observer_id, proposition_id)
-
-        subject_id = nested_chain[0]
-        remaining_chain = nested_chain[1:]
-        meta_level = len(nested_chain)
-
-        # Erstelle nested signature
-        if remaining_chain:
-            nested_sig = self._create_nested_signature(remaining_chain, proposition_id)
-        else:
-            nested_sig = f"K({subject_id}, {proposition_id})"
-
-        # Erstelle MetaBelief in Neo4j
-        success = self.netzwerk.add_meta_belief(
-            observer_id, subject_id, nested_sig, meta_level
+        """Helper: Check ob Agent Meta-Knowledge auf gegebenem Level hat"""
+        return self._nested_beliefs._has_meta_knowledge(
+            observer_id, group, prop_id, level
         )
 
-        if success:
-            logger.info(
-                f"Nested knowledge added: {observer_id} -> {nested_chain} -> {proposition_id}",
-                extra={
-                    "observer_id": observer_id,
-                    "nested_chain": nested_chain,
-                    "proposition_id": proposition_id,
-                    "nested_sig": nested_sig,
-                    "meta_level": meta_level,
-                },
-            )
+    def _ensure_state(self) -> None:
+        """Ensure current_state is initialized"""
+        self._core._ensure_state()
 
-        return success
 
-    def query_meta_knowledge_paths(
-        self, observer_id: str, max_depth: int = 3
-    ) -> List[Dict]:
-        """
-        Finde alle Meta-Knowledge-Pfade ausgehend von observer
+# ============================================================================
+# Re-export Data Structures for Backward Compatibility
+# ============================================================================
 
-        Nutzt Graph-Traversal für effiziente Suche
+__all__ = [
+    "EpistemicEngine",
+    "ModalOperator",
+    "Proposition",
+    "Agent",
+    "EpistemicState",
+    "MetaProposition",
+]
 
-        Args:
-            observer_id: ID des Beobachters
-            max_depth: Maximale Tiefe der Pfade (default: 3)
 
-        Returns:
-            Liste von Dicts mit:
-            - path: [observer -> subject1 -> subject2 -> ...]
-            - proposition: Die finale Proposition
-            - meta_level: Tiefe des Pfads
-        """
-        paths = []
-
-        with self.netzwerk.driver.session(database="neo4j") as session:
-            # Cypher: Variable-length path query
-            # Findet alle Pfade: (observer)-[:KNOWS_THAT*1..max_depth]->(mb:MetaBelief)
-            result = session.run(
-                """
-                MATCH path = (observer:Agent {id: $observer_id})
-                             -[:KNOWS_THAT*1..%d]->(mb:MetaBelief)
-                UNWIND nodes(path) AS node
-                WITH path, mb,
-                     [n IN nodes(path) WHERE n:Agent | n.id] AS agent_chain,
-                     length(path) AS depth
-                RETURN agent_chain, mb.proposition AS proposition, depth
-                ORDER BY depth ASC
-                """
-                % max_depth,
-                observer_id=observer_id,
-            )
-
-            for record in result:
-                paths.append(
-                    {
-                        "path": record["agent_chain"],
-                        "proposition": record["proposition"],
-                        "meta_level": record["depth"],
-                    }
-                )
-
-        logger.debug(
-            f"Found {len(paths)} meta-knowledge paths from {observer_id}",
-            extra={
-                "observer_id": observer_id,
-                "max_depth": max_depth,
-                "paths_found": len(paths),
-            },
-        )
-        return paths
-
+# ============================================================================
+# Mini-Test (preserved from original for compatibility)
+# ============================================================================
 
 if __name__ == "__main__":
     # Mini-Test
@@ -879,7 +479,7 @@ if __name__ == "__main__":
     print(f"K(alice, grass_is_red) = {result2}")
     assert result2 is False, "Expected False for unknown proposition"
 
-    print("✓ K operator test passed")
+    print("[OK] K operator test passed")
 
     # Test M operator
     print("\nTesting M operator...")
@@ -902,7 +502,7 @@ if __name__ == "__main__":
     print(f"M(alice, sky_is_blue) = {result5}")
     assert result5 is True, "Expected True (Alice knows sky IS blue, so it's possible)"
 
-    print("✓ M operator test passed")
+    print("[OK] M operator test passed")
 
     # Test E operator
     print("\nTesting E operator...")
@@ -930,7 +530,7 @@ if __name__ == "__main__":
     print(f"E([], meeting_at_3pm) = {result8}")
     assert result8 is False, "Expected False for empty group"
 
-    print("✓ E operator test passed")
+    print("[OK] E operator test passed")
 
     # Test C operator (simple)
     print("\nTesting C operator (simple)...")
@@ -953,6 +553,6 @@ if __name__ == "__main__":
     # (C requires meta-knowledge, not just E)
     print(f"Note: Result is {result10} (depends on meta-knowledge presence)")
 
-    print("✓ C operator (simple) test passed")
+    print("[OK] C operator (simple) test passed")
 
-    print("\n✓ All tests passed!")
+    print("\n[OK] All tests passed!")

@@ -7,8 +7,9 @@ Zeigt Regelanwendungen in chronologischer Reihenfolge mit Details.
 """
 
 import logging
+from collections import deque
 from datetime import datetime
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from PySide6.QtCore import Qt, Slot
 from PySide6.QtWidgets import (
@@ -35,11 +36,12 @@ class ProductionTraceWidget(QWidget):
     Bei Klick auf eine Regel werden Details angezeigt.
     """
 
-    def __init__(self, parent=None):
+    def __init__(self, parent=None, max_trace_entries: int = 1000):
         super().__init__(parent)
 
-        # Trace-Daten (chronologisch)
-        self.trace_entries: List[Dict[str, Any]] = []
+        # Trace-Daten (chronologisch, bounded to prevent memory leak)
+        self.trace_entries = deque(maxlen=max_trace_entries)
+        self.max_trace_entries = max_trace_entries
         self.current_cycle = 0
 
         self.init_ui()

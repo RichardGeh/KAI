@@ -4,10 +4,18 @@ Unterstützt bidirektionale Konvertierung: Zahl ↔ Wort
 Bereich: 0-999 (erweiterbar auf größere Zahlen)
 """
 
+import logging
 import re
 from typing import Dict, List, Optional
 
+from neo4j.exceptions import Neo4jError
+
 from component_1_netzwerk_core import KonzeptNetzwerkCore
+
+logger = logging.getLogger(__name__)
+
+# Validation pattern for entity names (alphanumeric + underscore, German chars allowed)
+ENTITY_NAME_PATTERN = re.compile(r"^[a-zäöüß_][a-zäöüß0-9_]{0,63}$", re.IGNORECASE)
 
 
 class NumberParser:
@@ -85,9 +93,14 @@ class NumberParser:
                     value = record["value"]
                     if isinstance(value, (int, float)):
                         self.learned_numbers[word] = int(value)
-        except Exception:
-            # Fehler beim Laden ignorieren (DB kann leer sein)
-            pass
+        except Neo4jError as e:
+            # Expected during initialization when DB is empty
+            logger.debug(f"Could not load learned numbers (DB may be empty): {e}")
+        except Exception as e:
+            # Unexpected errors should be logged with full context
+            logger.error(
+                f"Unexpected error loading learned numbers: {e}", exc_info=True
+            )
 
     def parse(self, word: str) -> Optional[int]:
         """
@@ -396,6 +409,23 @@ class ArithmeticConceptConnector:
     def __init__(self, netzwerk: KonzeptNetzwerkCore):
         self.netzwerk = netzwerk
 
+    def _validate_concept_name(self, name: str) -> None:
+        """
+        Validate concept/operation names before Neo4j storage.
+
+        Args:
+            name: Concept or operation name to validate
+
+        Raises:
+            ValueError: If name is invalid (empty, too long, invalid characters)
+        """
+        if not name or len(name) > 64:
+            raise ValueError(f"Concept name must be 1-64 chars, got: {len(name)}")
+        if not ENTITY_NAME_PATTERN.match(name):
+            raise ValueError(
+                f"Invalid concept name (use alphanumeric + underscore): {name}"
+            )
+
     def learn_concept(self, concept_word: str, operation: str, symbol: str) -> bool:
         """
         Lernt arithmetisches Konzept und speichert in Neo4j
@@ -414,6 +444,10 @@ class ArithmeticConceptConnector:
         try:
             concept_lemma = concept_word.lower().strip()
             operation_name = operation.lower().strip()
+
+            # Validate inputs before database operations
+            self._validate_concept_name(concept_lemma)
+            self._validate_concept_name(operation_name)
 
             query = """
             MERGE (c:Konzept {name: $concept})
@@ -436,8 +470,11 @@ class ArithmeticConceptConnector:
                 record = result.single()
                 return record is not None
 
-        except Exception as e:
-            print(f"Fehler beim Lernen des Konzepts: {e}")
+        except ValueError as e:
+            logger.warning(f"Invalid concept data: {e}")
+            return False
+        except Neo4jError as e:
+            logger.error(f"Failed to learn concept {concept_word}: {e}", exc_info=True)
             return False
 
     def query_operation(self, concept_word: str) -> Optional[Dict[str, str]]:
@@ -467,8 +504,8 @@ class ArithmeticConceptConnector:
                         "symbol": record["symbol"],
                     }
 
-        except Exception:
-            pass
+        except Neo4jError as e:
+            logger.warning(f"Query error for operation {concept_word}: {e}")
 
         return None
 
@@ -496,8 +533,8 @@ class ArithmeticConceptConnector:
                 if record:
                     return record["concept"]
 
-        except Exception:
-            pass
+        except Neo4jError as e:
+            logger.warning(f"Query error for concept {operation}: {e}")
 
         return None
 
@@ -530,18 +567,59 @@ class ArithmeticConceptConnector:
 
     def initialize_basic_concepts(self) -> int:
         """
-        Initialisiert Basis-Arithmetik-Konzepte in Neo4j
+        Initialisiert Basis-Arithmetik-Konzepte in Neo4j in atomic transaction
 
         Returns:
             Anzahl der erfolgreich gespeicherten Konzepte
         """
-        success_count = 0
+        try:
+            with self.netzwerk.driver.session() as session:
+                with session.begin_transaction() as tx:
+                    success_count = 0
 
-        for concept, (operation, symbol) in self.ARITHMETIC_CONCEPTS.items():
-            if self.learn_concept(concept, operation, symbol):
-                success_count += 1
+                    for concept, (
+                        operation,
+                        symbol,
+                    ) in self.ARITHMETIC_CONCEPTS.items():
+                        concept_lemma = concept.lower().strip()
+                        operation_name = operation.lower().strip()
 
-        return success_count
+                        # Validate before adding to transaction
+                        try:
+                            self._validate_concept_name(concept_lemma)
+                            self._validate_concept_name(operation_name)
+                        except ValueError as e:
+                            logger.warning(f"Skipping invalid concept {concept}: {e}")
+                            continue
+
+                        result = tx.run(
+                            """
+                            MERGE (c:Konzept {name: $concept})
+                            ON CREATE SET c.type = 'arithmetic_concept'
+                            MERGE (o:Operation {name: $operation, symbol: $symbol})
+                            ON CREATE SET o.type = 'arithmetic_operation'
+                            MERGE (c)-[r:EQUIVALENT_TO]->(o)
+                            ON CREATE SET r.confidence = 1.0, r.source = 'arithmetic_concepts'
+                            ON MATCH SET r.confidence = 1.0, r.source = 'arithmetic_concepts'
+                            RETURN c, o
+                            """,
+                            concept=concept_lemma,
+                            operation=operation_name,
+                            symbol=symbol,
+                        )
+                        if result.single():
+                            success_count += 1
+
+                    tx.commit()
+
+            logger.info(
+                f"Initialized {success_count}/{len(self.ARITHMETIC_CONCEPTS)} concepts atomically"
+            )
+            return success_count
+
+        except Neo4jError as e:
+            logger.error(f"Failed to initialize concepts (rolled back): {e}")
+            return 0
 
 
 class NumberLanguageConnector:
@@ -555,6 +633,66 @@ class NumberLanguageConnector:
         self.parser = NumberParser(netzwerk)
         self.formatter = NumberFormatter()
         self.arithmetic_concepts = ArithmeticConceptConnector(netzwerk)
+
+        # Ensure indexes exist for performance
+        self._ensure_indexes()
+
+    def _ensure_indexes(self) -> None:
+        """Create required indexes for number language operations."""
+        try:
+            with self.netzwerk.driver.session() as session:
+                # Index for fast number value lookups
+                session.run(
+                    """
+                    CREATE INDEX number_value_idx IF NOT EXISTS
+                    FOR (n:NumberNode) ON (n.value)
+                """
+                )
+                # Index for concept names
+                session.run(
+                    """
+                    CREATE INDEX concept_name_idx IF NOT EXISTS
+                    FOR (c:Konzept) ON (c.name)
+                """
+                )
+                # Index for operation names
+                session.run(
+                    """
+                    CREATE INDEX operation_name_idx IF NOT EXISTS
+                    FOR (o:Operation) ON (o.name)
+                """
+                )
+            logger.debug("Number language indexes ensured")
+        except Neo4jError as e:
+            logger.warning(f"Index creation failed (may already exist): {e}")
+
+    def _validate_word(self, word: str) -> None:
+        """
+        Validate word before Neo4j storage.
+
+        Args:
+            word: Word to validate
+
+        Raises:
+            ValueError: If word is invalid
+        """
+        if not word or len(word) > 64:
+            raise ValueError(f"Word must be 1-64 chars, got: {len(word)}")
+        if not ENTITY_NAME_PATTERN.match(word):
+            raise ValueError(f"Invalid word (use alphanumeric + underscore): {word}")
+
+    def _validate_number_value(self, value: int) -> None:
+        """
+        Validate number range before storage.
+
+        Args:
+            value: Number value to validate
+
+        Raises:
+            ValueError: If value is out of valid range
+        """
+        if not -999999 <= value <= 999999:
+            raise ValueError(f"Number value out of range [-999999, 999999]: {value}")
 
     def learn_number(self, word: str, value: int) -> bool:
         """
@@ -570,6 +708,10 @@ class NumberLanguageConnector:
         try:
             # Erstelle Wort-Node und Number-Node mit EQUIVALENT_TO Relation
             word_lemma = word.lower().strip()
+
+            # Validate inputs before database operations
+            self._validate_word(word_lemma)
+            self._validate_number_value(value)
 
             query = """
             MERGE (w:Wort {lemma: $word})
@@ -588,8 +730,11 @@ class NumberLanguageConnector:
                 record = result.single()
                 return record is not None
 
-        except Exception:
-            # Fehler beim Lernen loggen
+        except ValueError as e:
+            logger.warning(f"Invalid number data: {e}")
+            return False
+        except Neo4jError as e:
+            logger.error(f"Failed to learn number {word}: {e}", exc_info=True)
             return False
 
     def query_number(self, word: str) -> Optional[int]:
@@ -616,8 +761,8 @@ class NumberLanguageConnector:
                 if record:
                     return int(record["value"])
 
-        except Exception:
-            pass
+        except Neo4jError as e:
+            logger.warning(f"Query error for number word {word}: {e}")
 
         return None
 
@@ -643,14 +788,14 @@ class NumberLanguageConnector:
                 if record:
                     return record["word"]
 
-        except Exception:
-            pass
+        except Neo4jError as e:
+            logger.warning(f"Query error for number value {value}: {e}")
 
         return None
 
     def initialize_basic_numbers(self, count: int = 100) -> int:
         """
-        Initialisiert Basis-Zahlen in Neo4j (0 bis count)
+        Initialisiert Basis-Zahlen in Neo4j (0 bis count) in atomic transaction
 
         Args:
             count: Anzahl der zu initialisierenden Zahlen
@@ -658,14 +803,48 @@ class NumberLanguageConnector:
         Returns:
             Anzahl der erfolgreich gespeicherten Zahlen
         """
-        success_count = 0
+        try:
+            with self.netzwerk.driver.session() as session:
+                with session.begin_transaction() as tx:
+                    success_count = 0
+                    for i in range(count + 1):
+                        word = self.formatter.format(i)
+                        word_lemma = word.lower().strip()
 
-        for i in range(count + 1):
-            word = self.formatter.format(i)
-            if self.learn_number(word, i):
-                success_count += 1
+                        # Validate before adding to transaction
+                        try:
+                            self._validate_word(word_lemma)
+                            self._validate_number_value(i)
+                        except ValueError as e:
+                            logger.warning(f"Skipping invalid number {i}: {e}")
+                            continue
 
-        return success_count
+                        result = tx.run(
+                            """
+                            MERGE (w:Wort {lemma: $word})
+                            ON CREATE SET w.pos = 'NUM'
+                            ON MATCH SET w.pos = 'NUM'
+                            MERGE (n:NumberNode {value: $value})
+                            ON CREATE SET n.word = $word
+                            MERGE (w)-[r:EQUIVALENT_TO]->(n)
+                            ON CREATE SET r.confidence = 1.0, r.source = 'number_language'
+                            ON MATCH SET r.confidence = 1.0, r.source = 'number_language'
+                            RETURN w, n
+                            """,
+                            word=word_lemma,
+                            value=i,
+                        )
+                        if result.single():
+                            success_count += 1
+
+                    tx.commit()
+
+            logger.info(f"Initialized {success_count}/{count + 1} numbers atomically")
+            return success_count
+
+        except Neo4jError as e:
+            logger.error(f"Failed to initialize numbers (rolled back): {e}")
+            return 0
 
 
 class ArithmeticQuestionParser:

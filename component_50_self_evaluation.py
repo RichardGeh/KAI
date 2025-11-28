@@ -52,7 +52,7 @@ class CheckResult:
     details: Dict[str, Any] = field(default_factory=dict)
 
     def __repr__(self) -> str:
-        status = "✓" if self.passed else "✗"
+        status = "[OK]" if self.passed else "[FEHLER]"
         return f"{status} {self.score:.2f} ({len(self.issues)} issues)"
 
 
@@ -94,7 +94,7 @@ class EvaluationResult:
         if self.uncertainties:
             lines.append("\nUnsicherheiten:")
             for u in self.uncertainties:
-                lines.append(f"  ⚠ {u}")
+                lines.append(f"  [WARNUNG] {u}")
 
         lines.append("\nChecks:")
         for check_name, result in self.checks.items():
@@ -123,6 +123,17 @@ class SelfEvaluationConfig:
     good_threshold: float = 0.7
     acceptable_threshold: float = 0.6
 
+    # Check weights (MUST sum to 1.0)
+    consistency_weight: float = 0.3
+    confidence_calibration_weight: float = 0.2
+    completeness_weight: float = 0.3
+    proof_quality_weight: float = 0.2
+
+    # Thresholds for specific checks
+    max_acceptable_contradictions: int = 2
+    min_expected_answer_length_per_question: int = 20
+    multipart_completeness_penalty: float = 0.3
+
     # Contradiction detection
     contradiction_keywords: List[str] = field(
         default_factory=lambda: [
@@ -142,6 +153,18 @@ class SelfEvaluationConfig:
     question_words: List[str] = field(
         default_factory=lambda: ["was", "wer", "wie", "warum", "wo", "wann", "welche"]
     )
+
+    def __post_init__(self):
+        """Validate configuration"""
+        # Validate weights sum to 1.0
+        total_weight = (
+            self.consistency_weight
+            + self.confidence_calibration_weight
+            + self.completeness_weight
+            + self.proof_quality_weight
+        )
+        if abs(total_weight - 1.0) > 0.01:
+            raise ValueError(f"Weights must sum to 1.0, got {total_weight}")
 
 
 # ============================================================================
@@ -227,12 +250,12 @@ class SelfEvaluator:
                 proof_tree, reasoning_paths
             )
 
-            # Calculate overall score (weighted average)
+            # Calculate overall score (weighted average from config)
             weights = {
-                "consistency": 0.3,
-                "confidence_calibration": 0.2,
-                "completeness": 0.3,
-                "proof_quality": 0.2,
+                "consistency": self.config.consistency_weight,
+                "confidence_calibration": self.config.confidence_calibration_weight,
+                "completeness": self.config.completeness_weight,
+                "proof_quality": self.config.proof_quality_weight,
             }
 
             overall_score = sum(checks[key].score * weights[key] for key in weights)
@@ -323,8 +346,8 @@ class SelfEvaluator:
             if keyword in text_lower:
                 contradiction_count += 1
 
-        # Mehr als 2 Widerspruchs-Keywords → verdächtig
-        if contradiction_count > 2:
+        # Mehr als config Widerspruchs-Keywords -> verdächtig
+        if contradiction_count > self.config.max_acceptable_contradictions:
             issues.append(
                 f"Viele Widerspruchs-Indikatoren gefunden ({contradiction_count})"
             )
@@ -478,7 +501,7 @@ class SelfEvaluator:
                     issues.append(
                         f"Teil {i+1} der Frage möglicherweise nicht beantwortet"
                     )
-                    score -= 0.3 / len(parts)
+                    score -= self.config.multipart_completeness_penalty / len(parts)
 
         # 2. Question Word Detection
         question_words_found = []
@@ -489,7 +512,10 @@ class SelfEvaluator:
         # Check ob Antwort entsprechende Information liefert
         # Sehr vereinfacht: Mindestlänge-Check
         if question_words_found:
-            min_expected_length = 20 * len(question_words_found)
+            min_expected_length = (
+                self.config.min_expected_answer_length_per_question
+                * len(question_words_found)
+            )
             if len(answer_text) < min_expected_length:
                 issues.append(
                     f"Antwort erscheint zu kurz für {len(question_words_found)} Frage-Wörter"
@@ -679,22 +705,26 @@ class SelfEvaluator:
 
         # Consistency issues
         if checks["consistency"].score < self.config.consistency_threshold:
-            uncertainties.append("⚠ Mögliche Widersprüche in der Begründung")
+            uncertainties.append("[WARNUNG] Mögliche Widersprüche in der Begründung")
 
         # Confidence calibration issues
         if (
             checks["confidence_calibration"].score
             < self.config.confidence_calibration_threshold
         ):
-            uncertainties.append("⚠ Confidence könnte zu hoch oder zu niedrig sein")
+            uncertainties.append(
+                "[WARNUNG] Confidence könnte zu hoch oder zu niedrig sein"
+            )
 
         # Completeness issues
         if checks["completeness"].score < self.config.completeness_threshold:
-            uncertainties.append("⚠ Frage möglicherweise nicht vollständig beantwortet")
+            uncertainties.append(
+                "[WARNUNG] Frage möglicherweise nicht vollständig beantwortet"
+            )
 
         # Proof quality issues
         if checks["proof_quality"].score < self.config.proof_quality_threshold:
-            uncertainties.append("⚠ Beweis-Qualität könnte verbessert werden")
+            uncertainties.append("[WARNUNG] Beweis-Qualität könnte verbessert werden")
 
         # Add specific issues from checks
         for check_name, result in checks.items():

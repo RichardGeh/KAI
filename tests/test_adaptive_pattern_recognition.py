@@ -80,17 +80,23 @@ class TestAdaptiveThresholds:
 
         # Test: Cold Start - sehr konservativ
         gates_cold = manager.get_confidence_gates(BootstrapPhase.COLD_START)
-        assert gates_cold["auto_correct"] == 0.95
+        assert (
+            gates_cold["auto_correct"] == 999.0
+        )  # Disabled (intentionally unreachable)
         assert gates_cold["ask_user"] == 0.80
 
         # Test: Warming - standard
         gates_warming = manager.get_confidence_gates(BootstrapPhase.WARMING)
-        assert gates_warming["auto_correct"] == 0.85
+        assert (
+            gates_warming["auto_correct"] == 999.0
+        )  # Disabled (intentionally unreachable)
         assert gates_warming["ask_user"] == 0.60
 
         # Test: Mature - aggressiv
         gates_mature = manager.get_confidence_gates(BootstrapPhase.MATURE)
-        assert gates_mature["auto_correct"] == 0.75
+        assert (
+            gates_mature["auto_correct"] == 999.0
+        )  # Disabled (intentionally unreachable)
         assert gates_mature["ask_user"] == 0.50
 
     def test_bootstrap_confidence_multiplier(self, netzwerk):

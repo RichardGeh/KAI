@@ -76,6 +76,130 @@ Das Production System ist ein **regelbasiertes Response-Generation-System** nach
 **4. ProductionRuleRepository** - Neo4j Persistierung (PHASE 9)
 **5. ResponseGenerationRouter** - A/B Testing (PHASE 7)
 
+### Modulare Struktur
+
+Das Production System ist in **7 spezialisierte Module** aufgeteilt (refactored von monolithischem component_54_production_rules.py):
+
+#### Kern-Module
+
+**1. component_54_production_rule_factories.py** (84 Zeilen)
+- Shared Utilities für Regelerstellung
+- **Funktionen**: `calculate_specificity()`, `create_production_rule()`
+- **Konstanten**: `MAX_PENDING_FACTS`, `HIGH_CONFIDENCE_THRESHOLD`, `MEDIUM_CONFIDENCE_MIN/MAX`, `LOW_CONFIDENCE_THRESHOLD`, etc.
+- **German Grammar Utilities**: `determine_german_article()`, `pluralize_german_noun()`
+- Single Source of Truth für alle Schwellwerte und Konfiguration
+
+**2. component_54_production_types.py**
+- Enums und Type Definitions (`RuleCategory`, `GenerationGoalType`, etc.)
+
+**3. component_54_production_state.py**
+- `ResponseGenerationState` (Working Memory)
+- **Helper Methoden**: `get_facts_by_relation()`, `is_phase_complete()`
+
+**4. component_54_production_rule.py**
+- `ProductionRule` Datenklasse (Condition → Action)
+
+**5. component_54_production_engine.py**
+- `ProductionSystemEngine` (Recognize-Act Cycle Orchestrator)
+
+#### Rule Factory Module
+
+**6. component_54_production_rules_content.py** (764 Zeilen)
+- **PHASE 2: Content Selection Rules** (15 Regeln)
+- Faktenauswahl: IS_A, HAS_PROPERTY, CAPABLE_OF, LOCATED_IN, PART_OF
+- Confidence-Filterung: require/warn/skip basierend auf Schwellwerten
+- Multi-Source Aggregation
+
+**7. component_54_production_rules_lexical.py** (913 Zeilen)
+- **PHASE 3: Lexicalization Rules** (15 Regeln)
+- Basic Verbalisierung: Fakten → natürliche Sprache
+- Stilistische Variation: formal/casual, Copula-Variation, Konjunktionen
+- Fakten-Kompression und Elaboration
+
+**8. component_54_production_rules_discourse.py** (648 Zeilen)
+- **PHASE 3: Discourse Management Rules** (12 Regeln)
+- Einleitungsstrategien: context-aware vs. simple
+- Confidence-Signaling: Unsicherheitsmarker, Qualifiers
+- Strukturierung: Multi-Part Antworten, Transitionen, Schlussfolgerungen
+
+**9. component_54_production_rules_syntax.py** (797 Zeilen)
+- **PHASE 4: Syntactic Realization Rules** (12 Regeln)
+- Artikel-Insertion: nominative, accusative, dative (case-aware)
+- Kapitalisierung: Satzanfang, Nomen
+- Interpunktion: Punkte, Kommata
+- Agreement: Verb-Subjekt, Gender
+
+**10. component_54_production_rules_aggregator.py** (67 Zeilen)
+- Aggregator-Funktionen für Regelsets
+- **Funktionen**:
+  - `create_all_content_selection_rules()` → 15 Regeln
+  - `create_all_lexicalization_rules()` → 15 Regeln
+  - `create_all_discourse_management_rules()` → 12 Regeln
+  - `create_all_syntactic_realization_rules()` → 12 Regeln
+  - `create_all_phase3_rules()` → 27 Regeln (lexical + discourse)
+  - `create_all_phase4_rules()` → 12 Regeln (syntax)
+  - `create_complete_production_system()` → 54 Regeln (alle Phasen)
+
+#### Wrapper-Module
+
+**11. component_54_production_rules.py** (145 Zeilen)
+- Backward Compatibility Wrapper
+- Re-exportiert alle Factory-Funktionen
+
+**12. component_54_production_system.py**
+- Haupt-Entry-Point (Main Wrapper)
+- Re-exportiert alle Komponenten
+- Verwendung für Application Code empfohlen
+
+#### Module-Dependency Graph
+
+```
+component_54_production_types (enums)
+         ↓
+component_54_production_state (ResponseGenerationState)
+         ↓
+component_54_production_rule (ProductionRule)
+         ↓
+component_54_production_rule_factories (helpers + constants)
+         ↓
+    ┌────┴─────┬─────────┬──────────┐
+    ↓          ↓         ↓          ↓
+ content    lexical  discourse   syntax
+ (_rules)   (_rules)  (_rules)   (_rules)
+    └────┬─────┴─────────┴──────────┘
+         ↓
+  aggregator (_rules_aggregator)
+         ↓
+  production_rules.py (compatibility)
+         ↓
+  production_system.py (main wrapper)
+```
+
+**Key Insight**: Keine zirkulären Dependencies. Klarer unidirektionaler Flow von Primitives → Helpers → Rules → Aggregators → Wrappers.
+
+#### Developer Guidelines
+
+**Für neue Regeln**:
+1. Wähle passendes Modul basierend auf PHASE und Kategorie
+2. Verwende `create_production_rule()` Factory aus `component_54_production_rule_factories`
+3. Importiere Konstanten statt Magic Numbers: `MAX_PENDING_FACTS`, `HIGH_CONFIDENCE_THRESHOLD`, etc.
+4. Verwende German Grammar Utilities: `determine_german_article()`, `pluralize_german_noun()`
+5. Füge Regel zu passendem Modul hinzu (ähnliche Regeln zusammenhalten)
+6. Update Aggregator-Funktion in `component_54_production_rules_aggregator` bei Bedarf
+7. Re-export in `component_54_production_system` für Backward Compatibility
+
+**Für Imports**:
+- **Application Code**: Import von `component_54_production_system` (Main Wrapper)
+- **Development/Debugging**: Import von spezifischen Modulen (z.B. `component_54_production_rules_content`) für Klarheit
+- **Tests**: `component_54_production_system` für Integration Tests, spezifische Module für Unit Tests
+
+**Module Size Guidelines**:
+- Content: 764 Zeilen (15 Regeln × ~51 Zeilen)
+- Lexical: 913 Zeilen (15 Regeln × ~61 Zeilen) - überschreitet 800-Zeilen-Limit um 113 Zeilen, gerechtfertigt durch funktionale Kohäsion
+- Discourse: 648 Zeilen (12 Regeln × ~54 Zeilen)
+- Syntax: 797 Zeilen (12 Regeln × ~66 Zeilen)
+- Alle Module außer Lexical unter CLAUDE.md 800-Zeilen-Guideline
+
 ---
 
 ## Kernkonzepte

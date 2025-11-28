@@ -31,6 +31,10 @@ from component_42_spatial_types import (
 
 logger = get_logger(__name__)
 
+# Constants for spatial reasoning
+TRANSITIVE_CONFIDENCE_DECAY = 0.9  # Confidence reduction for transitive inference
+DEFAULT_POSITION_TOLERANCE = 0.5  # Grid cells tolerance for position matching
+
 
 class SpatialReasoner:
     """
@@ -74,6 +78,32 @@ class SpatialReasoner:
                 "cache_ttl": 300,
             },
         )
+
+    def _safe_session_run(self, query: str, operation: str, **params):
+        """
+        Safely execute a Neo4j session.run() with proper null checks.
+
+        Args:
+            query: Cypher query to execute
+            operation: Description of operation (for logging)
+            **params: Query parameters
+
+        Returns:
+            Query result, or None if session unavailable
+        """
+        if not self.netzwerk:
+            logger.warning(f"Knowledge graph unavailable for {operation}")
+            return None
+
+        if not hasattr(self.netzwerk, "session") or self.netzwerk.session is None:
+            logger.error(f"Neo4j session not initialized for {operation}")
+            return None
+
+        try:
+            return self.netzwerk.session.run(query, **params)
+        except Exception as e:
+            logger.error(f"Error executing query for {operation}: {e}", exc_info=True)
+            return None
 
     def infer_spatial_relations(
         self, subject: str, relation_type: Optional[SpatialRelationType] = None
@@ -161,8 +191,10 @@ class SpatialReasoner:
             logger.error("Error during spatial reasoning: %s", str(e), exc_info=True)
             result.error = str(e)
             result.confidence = 0.0
+            # DO NOT cache errors - allow retry
+            return result
 
-        # Cache result
+        # Only cache successful results
         self._query_cache[cache_key] = result
 
         return result
@@ -255,7 +287,7 @@ class SpatialReasoner:
                             object=second_rel.object,
                             relation_type=rel_type,
                             confidence=min(rel.confidence, second_rel.confidence)
-                            * 0.9,  # Decay
+                            * TRANSITIVE_CONFIDENCE_DECAY,
                             metadata={
                                 "inferred_via": "transitivity",
                                 "intermediate": rel.object,
@@ -1154,7 +1186,12 @@ class SpatialReasoner:
             RETURN obj.lemma as object_name
             """
 
-            result = self.netzwerk.session.run(query, pos_name=pos_name)
+            result = self._safe_session_run(
+                query, "get_objects_at_position", pos_name=pos_name
+            )
+            if result is None:
+                return []
+
             objects = [record["object_name"] for record in result]
 
             logger.debug("Found %d objects at position %s", len(objects), pos_name)
@@ -1585,7 +1622,12 @@ class SpatialReasoner:
             ORDER BY vertex.index
             """
 
-            result = self.netzwerk.session.run(query, shape_name=shape_name)
+            result = self._safe_session_run(
+                query, "get_shape_vertices", shape_name=shape_name
+            )
+            if result is None:
+                return []
+
             vertices = [Position(record["x"], record["y"]) for record in result]
 
             return vertices
@@ -2374,7 +2416,12 @@ class SpatialReasoner:
                 MATCH (pattern {lemma: $pattern_id})-[:HAS_MOVEMENT_VECTOR]->(vector)
                 RETURN vector.dx as dx, vector.dy as dy
             """
-            results = self.netzwerk.session.run(query, pattern_id=pattern_id)
+            results = self._safe_session_run(
+                query, "get_learned_movement_pattern", pattern_id=pattern_id
+            )
+
+            if results is None:
+                return None
 
             for record in results:
                 vectors.append((record["dx"], record["dy"]))
@@ -2490,7 +2537,12 @@ class SpatialReasoner:
                 WHERE config.type = 'SpatialConfiguration'
                 RETURN config.lemma as name, config.num_objects as num_objects
             """
-            results = self.netzwerk.session.run(query)
+            results = self._safe_session_run(
+                query, "detect_spatial_pattern_in_configuration"
+            )
+
+            if results is None:
+                return []
 
             for record in results:
                 config_name = record["name"]
@@ -2520,7 +2572,7 @@ class SpatialReasoner:
         self,
         config_id: str,
         objects_and_positions: Dict[str, Position],
-        tolerance: float = 0.5,
+        tolerance: float = DEFAULT_POSITION_TOLERANCE,
     ) -> bool:
         """
         Check if current configuration matches a stored pattern.
@@ -2540,7 +2592,12 @@ class SpatialReasoner:
                 RETURN rel.object1 as obj1, rel.object2 as obj2,
                        rel.dx as dx, rel.dy as dy
             """
-            results = self.netzwerk.session.run(query, config_id=config_id)
+            results = self._safe_session_run(
+                query, "check_configuration_match", config_id=config_id
+            )
+
+            if results is None:
+                return False
 
             # Check each relative position
             for record in results:

@@ -943,6 +943,54 @@ class TestRunnerTab(QWidget):
                 "test_adaptive_pattern_recognition.py",
                 "TestTypoFeedbackRecording",
             ),
+            (
+                "Pattern Recognition",
+                "Command Suggestions - Known Typos",
+                "test_command_suggestions.py",
+                "TestKnownTypoDetection",
+            ),
+            (
+                "Pattern Recognition",
+                "Command Suggestions - Fuzzy Matching",
+                "test_command_suggestions.py",
+                "TestFuzzyMatching",
+            ),
+            (
+                "Pattern Recognition",
+                "Command Suggestions - False Positives",
+                "test_command_suggestions.py",
+                "TestFalsePositivePrevention",
+            ),
+            (
+                "Pattern Recognition",
+                "Command Suggestions - Edge Cases",
+                "test_command_suggestions.py",
+                "TestEdgeCases",
+            ),
+            (
+                "Pattern Recognition",
+                "Regex Validator - Valid Patterns",
+                "test_regex_validator.py",
+                "TestValidPatterns",
+            ),
+            (
+                "Pattern Recognition",
+                "Regex Validator - Invalid Patterns",
+                "test_regex_validator.py",
+                "TestInvalidPatterns",
+            ),
+            (
+                "Pattern Recognition",
+                "Regex Validator - Syntax Errors",
+                "test_regex_validator.py",
+                "TestSyntaxErrors",
+            ),
+            (
+                "Pattern Recognition",
+                "Regex Validator - Warnings",
+                "test_regex_validator.py",
+                "TestWarningDetection",
+            ),
             # Learning & Knowledge Acquisition
             ("Learning", "Goal Planner", "test_goal_planner.py", "TestGoalPlanner"),
             (
