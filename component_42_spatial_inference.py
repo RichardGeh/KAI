@@ -16,8 +16,6 @@ Date: 2025-11-27
 import threading
 from typing import Dict, List, Optional, Tuple
 
-from cachetools import TTLCache
-
 from component_15_logging_config import get_logger
 from component_17_proof_explanation import ProofStep, StepType
 from component_42_spatial_types import (
@@ -25,6 +23,7 @@ from component_42_spatial_types import (
     SpatialRelation,
     SpatialRelationType,
 )
+from infrastructure.cache_manager import cache_manager
 
 logger = get_logger(__name__)
 
@@ -57,8 +56,8 @@ class SpatialInferenceEngine:
         self.netzwerk = netzwerk
         self._lock = threading.RLock()  # For thread safety
 
-        # Cache for spatial queries (5 minute TTL)
-        self._query_cache = TTLCache(maxsize=100, ttl=300)
+        # Cache for spatial queries (5 minute TTL) via CacheManager
+        cache_manager.register_cache("spatial_queries", maxsize=100, ttl=300)
 
         # Supported spatial relations
         self.spatial_relation_types = {rt.value for rt in SpatialRelationType}
@@ -100,7 +99,8 @@ class SpatialInferenceEngine:
             self._performance_metrics["queries_total"] += 1
 
             # Check cache
-            if cache_key in self._query_cache:
+            cached_result = cache_manager.get("spatial_queries", cache_key)
+            if cached_result is not None:
                 self._performance_metrics["queries_cached"] += 1
                 logger.debug(
                     "Cache hit for spatial query",
@@ -110,7 +110,7 @@ class SpatialInferenceEngine:
                         / self._performance_metrics["queries_total"],
                     },
                 )
-                return self._query_cache[cache_key]
+                return cached_result
 
             logger.info(
                 "Inferring spatial relations",
@@ -173,7 +173,7 @@ class SpatialInferenceEngine:
                 return result
 
             # Only cache successful results
-            self._query_cache[cache_key] = result
+            cache_manager.set("spatial_queries", cache_key, result)
 
             return result
 
@@ -485,7 +485,7 @@ class SpatialInferenceEngine:
     def clear_cache(self):
         """Clear the query cache."""
         with self._lock:
-            self._query_cache.clear()
+            cache_manager.invalidate("spatial_queries")
             logger.info("Spatial inference cache cleared")
 
     def get_performance_metrics(self) -> Dict[str, any]:
@@ -498,9 +498,13 @@ class SpatialInferenceEngine:
         with self._lock:
             metrics = self._performance_metrics.copy()
 
-            # Add cache statistics
-            metrics["cache_size"] = len(self._query_cache)
-            metrics["cache_max_size"] = self._query_cache.maxsize
+            # Add cache statistics from CacheManager
+            cache_stats = cache_manager.get_stats("spatial_queries")
+            metrics["cache_size"] = cache_stats["size"]
+            metrics["cache_max_size"] = cache_stats["maxsize"]
+            metrics["cache_hits_cm"] = cache_stats["hits"]
+            metrics["cache_misses_cm"] = cache_stats["misses"]
+            metrics["cache_hit_rate_cm"] = cache_stats["hit_rate"]
 
             if metrics["queries_total"] > 0:
                 metrics["cache_hit_rate"] = (

@@ -245,6 +245,80 @@ class KonzeptNetzwerkCore:
             query_word, embedding_service, similarity_threshold, max_results
         )
 
+    def query_semantic_neighbors(
+        self,
+        lemma: str,
+        allowed_relations: Optional[List[str]] = None,
+        min_confidence: float = 0.0,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find semantic neighbors with bidirectional relationship search.
+
+        Used by resonance engine for spreading activation algorithm.
+
+        Args:
+            lemma: Word to find neighbors for
+            allowed_relations: Optional list of relation types to filter
+            min_confidence: Minimum confidence threshold (0.0-1.0)
+            limit: Maximum number of neighbors to return
+
+        Returns:
+            List of dicts with neighbor info (neighbor, relation_type, confidence)
+        """
+        return self.queries.query_semantic_neighbors(
+            lemma, allowed_relations, min_confidence, limit
+        )
+
+    def query_transitive_path(
+        self,
+        subject: Optional[str],
+        predicate: str,
+        object: Optional[str],
+        max_hops: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find transitive paths between concepts (multi-hop reasoning).
+
+        Used by logic engine for backward chaining.
+
+        Args:
+            subject: Starting concept (None = match any)
+            predicate: Relation type to follow
+            object: Ending concept (None = match any)
+            max_hops: Maximum path length (1-5)
+
+        Returns:
+            List of dicts with path info (subject, object, hops, path)
+        """
+        return self.queries.query_transitive_path(subject, predicate, object, max_hops)
+
+    def create_specialized_node(
+        self,
+        label: str,
+        properties: Dict[str, Any],
+        link_to_word: Optional[str] = None,
+        relation_type: str = "EQUIVALENT_TO",
+    ) -> bool:
+        """
+        Create a specialized node with custom label (e.g., NumberNode, Operation).
+
+        Used by number language and spatial reasoning modules to create typed nodes
+        beyond the standard Wort/Konzept schema.
+
+        Args:
+            label: Node label (e.g., "NumberNode", "Operation", "SpatialObject")
+            properties: Dict of properties to set on the node
+            link_to_word: Optional lemma to link via relation
+            relation_type: Relation type for word link (default: "EQUIVALENT_TO")
+
+        Returns:
+            True if successful, False otherwise
+        """
+        return self.relations.create_specialized_node(
+            label, properties, link_to_word, relation_type
+        )
+
     # ============================================================================
     # Production Rule Management (delegated to QueryEngine)
     # ============================================================================

@@ -19,7 +19,9 @@ import uuid
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Any, Deque, Dict, List, Optional, Tuple
+
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +168,7 @@ class BeliefState:
 # ==================== PROBABILISTIC ENGINE ====================
 
 
-class ProbabilisticEngine:
+class ProbabilisticEngine(BaseReasoningEngine):
     """
     Haupt-Engine für probabilistisches Schließen.
 
@@ -175,6 +177,8 @@ class ProbabilisticEngine:
     - Confidence-Propagation durch Reasoning-Ketten
     - Noisy-OR für redundante Evidenz
     - Uncertainty-Aware Response Generation
+
+    Implements BaseReasoningEngine for integration with reasoning orchestrator.
     """
 
     def __init__(self, max_facts: int = 10000, max_rules: int = 1000):
@@ -913,6 +917,86 @@ class ProbabilisticEngine:
             parts.append("")
 
         return "\n".join(parts)
+
+    # ==================== BASE REASONING ENGINE INTERFACE ====================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute probabilistic inference on the query.
+
+        Args:
+            query: Proposition to query
+            context: Context (optional max_iterations)
+
+        Returns:
+            ReasoningResult with probability and confidence
+        """
+        # Run inference first if needed
+        max_iterations = context.get("max_iterations", 5)
+        self.infer(max_iterations=max_iterations)
+
+        # Query the proposition
+        probability, confidence = self.query(query)
+
+        # Generate answer
+        answer = self.generate_response(query)
+
+        # Create proof tree
+        proof_tree = None
+        if UNIFIED_PROOFS_AVAILABLE:
+            proof_steps = self.explain_with_proof_step(query)
+            if proof_steps:
+                from component_17_proof_explanation import ProofTree
+
+                proof_tree = ProofTree(query=query)
+                for step in proof_steps:
+                    proof_tree.add_root_step(step)
+
+        return ReasoningResult(
+            success=probability > 0.2,  # Threshold for success
+            answer=answer,
+            confidence=min(probability, confidence),  # Use min as overall confidence
+            proof_tree=proof_tree,
+            strategy_used="probabilistic_inference",
+            metadata={
+                "probability": probability,
+                "belief_confidence": confidence,
+                "num_facts": len(self.facts),
+                "num_rules": len(self.conditional_probs),
+            },
+        )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        return [
+            "probabilistic",
+            "bayesian_inference",
+            "uncertainty_reasoning",
+            "confidence_propagation",
+            "noisy_or",
+        ]
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for probabilistic reasoning.
+
+        Cost depends on:
+        - Number of facts and rules
+        - Inference complexity
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+        """
+        # Probabilistic inference is medium-expensive
+        base_cost = 0.5
+
+        # Fact/rule count affects cost
+        fact_cost = min(len(self.facts) / 1000.0, 0.2)
+        rule_cost = min(len(self.conditional_probs) / 100.0, 0.2)
+
+        total_cost = base_cost + fact_cost + rule_cost
+
+        return min(total_cost, 1.0)
 
 
 # ==================== INTEGRATION MIT LOGIK-ENGINE ====================

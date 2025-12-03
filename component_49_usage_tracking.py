@@ -20,8 +20,6 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from neo4j import Driver
-
 from component_15_logging_config import get_logger
 
 logger = get_logger(__name__)
@@ -106,14 +104,14 @@ class UsageTrackingManager:
     Koordiniert alle Tracking-Aktivitäten und speichert Usage-Daten in Neo4j.
     """
 
-    def __init__(self, driver: Driver):
+    def __init__(self, netzwerk):
         """
         Initialisiert den UsageTrackingManager.
 
         Args:
-            driver: Neo4j Driver-Instanz
+            netzwerk: KonzeptNetzwerk-Instanz
         """
-        self.driver = driver
+        self.netzwerk = netzwerk
 
         # Bounded buffer with automatic eviction (CRITICAL FIX: Issue #3)
         # maxlen=500 ensures bounded growth, preventing memory leaks
@@ -167,8 +165,8 @@ class UsageTrackingManager:
             ...     context="multi_hop_reasoning"
             ... )
         """
-        if not self.driver:
-            logger.warning("Kein Driver verfügbar für Relation Usage Tracking")
+        if not self.netzwerk or not self.netzwerk.driver:
+            logger.warning("Kein Netzwerk verfügbar für Relation Usage Tracking")
             return False
 
         try:
@@ -177,7 +175,8 @@ class UsageTrackingManager:
             safe_relation = re.sub(r"[^a-zA-Z0-9_]", "", relation.upper())
 
             with self._neo4j_lock:
-                with self.driver.session(database="neo4j") as session:
+                # Use driver directly for usage tracking (no facade method exists yet)
+                with self.netzwerk.driver.session(database="neo4j") as session:
                     # Use WHERE clause with type() function
                     session.run(
                         """
@@ -240,7 +239,7 @@ class UsageTrackingManager:
                     "object": object_,
                     "query_id": query_id,
                     "error_type": type(e).__name__,
-                    "driver_available": self.driver is not None,
+                    "driver_available": self.netzwerk.driver is not None,
                 },
             )
             return False
@@ -286,8 +285,8 @@ class UsageTrackingManager:
             ...     context="direct_query"
             ... )
         """
-        if not self.driver:
-            logger.warning("Kein Driver verfügbar für Concept Activation Tracking")
+        if not self.netzwerk or not self.netzwerk.driver:
+            logger.warning("Kein Netzwerk verfügbar für Concept Activation Tracking")
             return False
 
         if not 0.0 <= activation_level <= 1.0:
@@ -298,7 +297,8 @@ class UsageTrackingManager:
 
         try:
             with self._neo4j_lock:
-                with self.driver.session(database="neo4j") as session:
+                # Use driver directly for usage tracking (no facade method exists yet)
+                with self.netzwerk.driver.session(database="neo4j") as session:
                     session.run(
                         """
                         MATCH (k:Konzept {name: $concept})
@@ -348,7 +348,7 @@ class UsageTrackingManager:
                     "activation_level": activation_level,
                     "query_id": query_id,
                     "error_type": type(e).__name__,
-                    "driver_available": self.driver is not None,
+                    "driver_available": self.netzwerk.driver is not None,
                 },
             )
             return False
@@ -390,7 +390,7 @@ class UsageTrackingManager:
             ...     reasoning_depth=2
             ... )
         """
-        if not self.driver:
+        if not self.netzwerk or not self.netzwerk.driver:
             return False
 
         if activation_levels is None:
@@ -407,7 +407,8 @@ class UsageTrackingManager:
                 self.track_relation_usage(subject, relation, object_, query_id)
 
             # Update Query Record mit Metadaten
-            with self.driver.session(database="neo4j") as session:
+            # Use driver directly for query metadata (no facade method exists yet)
+            with self.netzwerk.driver.session(database="neo4j") as session:
                 session.run(
                     """
                     MATCH (q:QueryRecord {id: $query_id})
@@ -481,7 +482,7 @@ class UsageTrackingManager:
         self, subject: str, relation: str, object_: str
     ) -> UsageStats:
         """Holt Usage Stats für eine Relation."""
-        if not self.driver:
+        if not self.netzwerk or not self.netzwerk.driver:
             return UsageStats()
 
         try:
@@ -489,7 +490,8 @@ class UsageTrackingManager:
 
             safe_relation = re.sub(r"[^a-zA-Z0-9_]", "", relation.upper())
 
-            with self.driver.session(database="neo4j") as session:
+            # Use driver directly for usage statistics (no facade method exists yet)
+            with self.netzwerk.driver.session(database="neo4j") as session:
                 result = session.run(
                     f"""
                     MATCH (s:Konzept {{name: $subject}})-[r:{safe_relation}]->(o:Konzept {{name: $object}})
@@ -534,11 +536,12 @@ class UsageTrackingManager:
 
     def _get_concept_usage_statistics(self, concept: str) -> UsageStats:
         """Holt Usage Stats für ein Konzept."""
-        if not self.driver:
+        if not self.netzwerk or not self.netzwerk.driver:
             return UsageStats()
 
         try:
-            with self.driver.session(database="neo4j") as session:
+            # Use driver directly for usage statistics (no facade method exists yet)
+            with self.netzwerk.driver.session(database="neo4j") as session:
                 result = session.run(
                     """
                     MATCH (k:Konzept {name: $concept})
@@ -602,11 +605,12 @@ class UsageTrackingManager:
         Returns:
             Liste von Dicts mit {subject, relation, object, usage_count}
         """
-        if not self.driver:
+        if not self.netzwerk or not self.netzwerk.driver:
             return []
 
         try:
-            with self.driver.session(database="neo4j") as session:
+            # Use driver directly for analytics (no facade method exists yet)
+            with self.netzwerk.driver.session(database="neo4j") as session:
                 result = session.run(
                     """
                     MATCH (s:Konzept)-[r]->(o:Konzept)
@@ -637,11 +641,12 @@ class UsageTrackingManager:
         Returns:
             Liste von Dicts mit {concept, usage_frequency, last_used}
         """
-        if not self.driver:
+        if not self.netzwerk or not self.netzwerk.driver:
             return []
 
         try:
-            with self.driver.session(database="neo4j") as session:
+            # Use driver directly for analytics (no facade method exists yet)
+            with self.netzwerk.driver.session(database="neo4j") as session:
                 result = session.run(
                     """
                     MATCH (k:Konzept)
@@ -668,20 +673,20 @@ _global_usage_tracker: Optional[UsageTrackingManager] = None
 _usage_tracker_lock = threading.Lock()
 
 
-def get_usage_tracker(driver=None) -> UsageTrackingManager:
+def get_usage_tracker(netzwerk=None) -> UsageTrackingManager:
     """
     Gibt die globale UsageTrackingManager-Instanz zurück.
 
     Thread-safe mit double-check locking pattern.
 
     Args:
-        driver: Neo4j Driver (nur beim ersten Aufruf erforderlich)
+        netzwerk: KonzeptNetzwerk-Instanz (nur beim ersten Aufruf erforderlich)
 
     Returns:
         Globale UsageTrackingManager-Instanz
 
     Raises:
-        ValueError: Wenn beim ersten Aufruf kein driver übergeben wurde
+        ValueError: Wenn beim ersten Aufruf kein netzwerk übergeben wurde
     """
     global _global_usage_tracker
 
@@ -689,12 +694,12 @@ def get_usage_tracker(driver=None) -> UsageTrackingManager:
     if _global_usage_tracker is None:
         with _usage_tracker_lock:
             if _global_usage_tracker is None:
-                if driver is None:
+                if netzwerk is None:
                     raise ValueError(
-                        "Beim ersten Aufruf muss driver-Parameter übergeben werden"
+                        "Beim ersten Aufruf muss netzwerk-Parameter übergeben werden"
                     )
 
-                _global_usage_tracker = UsageTrackingManager(driver)
+                _global_usage_tracker = UsageTrackingManager(netzwerk)
                 logger.info("Globale UsageTrackingManager-Instanz erstellt")
 
     return _global_usage_tracker
@@ -709,12 +714,12 @@ if __name__ == "__main__":
 
     print("=== Usage Tracking System Demo ===\n")
 
-    # Mock Driver für Demo
-    class MockDriver:
-        pass
+    # Mock Netzwerk für Demo
+    class MockNetzwerk:
+        driver = None
 
-    driver = MockDriver()
-    manager = UsageTrackingManager(driver)
+    netzwerk = MockNetzwerk()
+    manager = UsageTrackingManager(netzwerk)
 
     print("Beispiel 1: Track Relation Usage")
     print("  manager.track_relation_usage('hund', 'IS_A', 'säugetier', 'query_1')")

@@ -1444,18 +1444,22 @@ class AdvancedReasoningMixin:
             logger.warning(f"PART_OF predicate validation failed: {e}")
             return False
 
-        # Query Neo4j für PART_OF Beziehung zwischen Locations
-        with self.netzwerk.driver.session(database="neo4j") as session:
-            # Prüfe beide Richtungen: loc1 PART_OF loc2 oder loc2 PART_OF loc1
-            # Safe: uses parameterized queries for loc1/loc2, relationship type is validated constant
-            query = """
-                MATCH path = (a:Konzept {name: $loc1})-[:PART_OF*1..3]-(b:Konzept {name: $loc2})
-                RETURN count(path) AS count
-            """
-            result = session.run(query, loc1=loc1, loc2=loc2)
-            record = result.single()
+        # Use facade method for transitive path query
+        # MIGRATION NOTE: Replaced direct session.run() with netzwerk.query_transitive_path()
+        # Original query lines 1448-1461 migrated to facade method (2025-12-03 Tier 2 Migration)
+        # Check both directions: loc1 PART_OF loc2 OR loc2 PART_OF loc1
 
-            if record and record["count"] > 0:
-                return True
+        # Try direction 1: loc1 -> loc2
+        paths_forward = self.netzwerk.query_transitive_path(
+            subject=loc1, predicate="PART_OF", object=loc2, max_hops=3
+        )
 
-        return False
+        if paths_forward:
+            return True
+
+        # Try direction 2: loc2 -> loc1
+        paths_backward = self.netzwerk.query_transitive_path(
+            subject=loc2, predicate="PART_OF", object=loc1, max_hops=3
+        )
+
+        return len(paths_backward) > 0

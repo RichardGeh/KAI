@@ -23,7 +23,7 @@ Original: component_12_graph_traversal.py (1,484 lines)
 import threading
 import uuid
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 # Re-export all public types for backward compatibility
 from component_12_graph_traversal_core import (
@@ -34,6 +34,7 @@ from component_12_graph_traversal_core import (
 )
 from component_12_path_algorithms import PathAlgorithms
 from component_12_traversal_strategies import TraversalStrategies
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 if UNIFIED_PROOFS_AVAILABLE:
     from component_17_proof_explanation import ProofStep as UnifiedProofStep
@@ -43,7 +44,7 @@ from component_15_logging_config import get_logger
 logger = get_logger(__name__)
 
 
-class GraphTraversal:
+class GraphTraversal(BaseReasoningEngine):
     """
     Graph-Traversal Engine fur Multi-Hop Reasoning (Facade).
 
@@ -54,6 +55,8 @@ class GraphTraversal:
     - GraphTraversalCore: Core utilities and helpers
     - TraversalStrategies: BFS, DFS, bidirectional search
     - PathAlgorithms: Transitive inference and proof generation
+
+    Implements BaseReasoningEngine for integration with reasoning orchestrator.
     """
 
     def __init__(self, netzwerk, use_dynamic_confidence: bool = True):
@@ -273,6 +276,116 @@ class GraphTraversal:
         Delegates to GraphTraversalCore._relation_to_german()
         """
         return self.core._relation_to_german(relation_type)
+
+    # ==================== BASE REASONING ENGINE INTERFACE ====================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute multi-hop graph reasoning on the query.
+
+        Args:
+            query: Natural language query to reason about
+            context: Context with start_concept, target_concept, relation_type, etc.
+
+        Returns:
+            ReasoningResult with answer, confidence, and proof tree
+        """
+        # Extract parameters from context
+        start_concept = context.get("start_concept", context.get("subject"))
+        target_concept = context.get("target_concept", context.get("object"))
+        relation_type = context.get("relation_type", "IS_A")
+        context.get("max_depth", self.max_depth)
+
+        if not start_concept or not target_concept:
+            return ReasoningResult(
+                success=False,
+                answer="Start- oder Zielkonzept fehlt fur Graph-Traversierung",
+                confidence=0.0,
+                strategy_used="graph_traversal",
+            )
+
+        # Find path between concepts
+        path = self.find_path_between_concepts(
+            start_concept=start_concept,
+            target_concept=target_concept,
+            allowed_relations=[relation_type] if relation_type else None,
+            strategy=TraversalStrategy.BREADTH_FIRST,
+        )
+
+        if path:
+            # Generate explanation and proof tree
+            explanation = self.explain_inference_chain(
+                target_concept, start_concept, relation_type
+            )
+            proof_tree = None
+
+            if UNIFIED_PROOFS_AVAILABLE:
+                proof_step = self.create_proof_step_from_path(path, query)
+                if proof_step:
+                    from component_17_proof_explanation import ProofTree
+
+                    proof_tree = ProofTree(query=query)
+                    proof_tree.add_root_step(proof_step)
+
+            return ReasoningResult(
+                success=True,
+                answer=explanation or f"Pfad gefunden: {' -> '.join(path.nodes)}",
+                confidence=path.confidence,
+                proof_tree=proof_tree,
+                strategy_used="graph_traversal_bfs",
+                metadata={
+                    "path_length": len(path.nodes),
+                    "path_nodes": path.nodes,
+                    "path_relations": path.relations,
+                },
+            )
+        else:
+            return ReasoningResult(
+                success=False,
+                answer=f"Kein Pfad gefunden zwischen {start_concept} und {target_concept}",
+                confidence=0.0,
+                strategy_used="graph_traversal",
+                metadata={
+                    "start": start_concept,
+                    "target": target_concept,
+                    "relation": relation_type,
+                },
+            )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        return [
+            "graph_traversal",
+            "multi_hop_inference",
+            "transitive_relations",
+            "path_finding",
+            "hierarchical_reasoning",
+        ]
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for graph traversal.
+
+        Cost depends on:
+        - Graph size (estimated from netzwerk)
+        - Max depth setting
+        - Query complexity
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+        """
+        # Graph traversal is generally medium cost
+        base_cost = 0.4
+
+        # Max depth affects cost (deeper = more expensive)
+        depth_cost = min(self.max_depth / 10.0, 0.2)
+
+        # Query complexity
+        query_complexity = min(len(query) / 200.0, 0.1)
+
+        total_cost = base_cost + depth_cost + query_complexity
+
+        return min(total_cost, 1.0)
 
     def _bfs_path(
         self, start: str, target: str, allowed_relations: Optional[List[str]]

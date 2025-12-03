@@ -1009,3 +1009,209 @@ class QueryEngine:
             stats["fact_cache"] = self.cache_mgr.get_stats("netzwerk_facts")
 
         return stats
+
+    def _safe_run(self, cypher: str, operation_name: str, **params) -> List[Any]:
+        """
+        Execute Cypher query with error handling.
+
+        This helper method provides consistent error handling for all query operations.
+
+        Args:
+            cypher: Cypher query string
+            operation_name: Operation name for logging
+            **params: Query parameters
+
+        Returns:
+            List of result records, or empty list on error
+        """
+        try:
+            with self.driver.session(database="neo4j") as session:
+                result = session.run(cypher, params)
+                return list(result)
+        except Exception as e:
+            logger.log_exception(e, f"{operation_name}: Fehler", **params)
+            return []
+
+    def query_semantic_neighbors(
+        self,
+        lemma: str,
+        allowed_relations: Optional[List[str]] = None,
+        min_confidence: float = 0.0,
+        limit: int = 50,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find semantic neighbors with bidirectional relationship search.
+
+        Used by resonance engine for spreading activation algorithm.
+
+        Args:
+            lemma: Word to find neighbors for
+            allowed_relations: Optional list of relation types to filter (e.g., ["IS_A", "HAS_PROPERTY"])
+            min_confidence: Minimum confidence threshold (0.0-1.0)
+            limit: Maximum number of neighbors to return
+
+        Returns:
+            List of dicts: [{"neighbor": str, "relation_type": str, "confidence": float}, ...]
+
+        Example:
+            neighbors = query_engine.query_semantic_neighbors(
+                "hund",
+                allowed_relations=["IS_A", "HAS_PROPERTY"],
+                min_confidence=0.5,
+                limit=20
+            )
+        """
+        try:
+            # Build Cypher query for bidirectional neighbor search
+            cypher = """
+            MATCH (start:Wort {lemma: $lemma})
+            MATCH (start)-[r]-(neighbor:Wort)
+            WHERE
+              (size($allowed_relations) = 0 OR type(r) IN $allowed_relations)
+              AND COALESCE(r.confidence, 0.7) >= $min_confidence
+              AND neighbor.lemma <> $lemma
+            RETURN DISTINCT
+              neighbor.lemma as neighbor,
+              type(r) as relation_type,
+              COALESCE(r.confidence, 0.7) as confidence
+            ORDER BY confidence DESC
+            LIMIT $limit
+            """
+
+            params = {
+                "lemma": lemma,
+                "allowed_relations": allowed_relations or [],
+                "min_confidence": min_confidence,
+                "limit": limit,
+            }
+
+            result = self._safe_run(cypher, "query_semantic_neighbors", **params)
+
+            neighbors = [
+                {
+                    "neighbor": record["neighbor"],
+                    "relation_type": record["relation_type"],
+                    "confidence": record["confidence"],
+                }
+                for record in result
+            ]
+
+            logger.debug(
+                f"Found {len(neighbors)} semantic neighbors for '{lemma}' "
+                f"(min_confidence={min_confidence}, limit={limit})"
+            )
+
+            return neighbors
+
+        except Exception as e:
+            logger.log_exception(
+                e, f"query_semantic_neighbors: Fehler für lemma='{lemma}'"
+            )
+            return []
+
+    def query_transitive_path(
+        self,
+        subject: Optional[str],
+        predicate: str,
+        object: Optional[str],
+        max_hops: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """
+        Find transitive paths between concepts (multi-hop reasoning).
+
+        Used by logic engine for backward chaining.
+
+        Args:
+            subject: Starting concept (None = match any)
+            predicate: Relation type to follow
+            object: Ending concept (None = match any)
+            max_hops: Maximum path length (1-5)
+
+        Returns:
+            List of dicts: [{"subject": str, "object": str, "hops": int, "path": List[str]}, ...]
+
+        Example:
+            # Find paths: hund -[IS_A*1..3]-> tier
+            paths = query_engine.query_transitive_path("hund", "IS_A", "tier", max_hops=3)
+        """
+        try:
+            # Validate inputs
+            if max_hops < 1 or max_hops > 5:
+                logger.warning(f"max_hops={max_hops} capped to [1,5]")
+                max_hops = max(1, min(5, max_hops))
+
+            # Build dynamic query based on what's specified
+            if subject and object:
+                # Both specified: find path between them
+                cypher = f"""
+                MATCH path = (start:Konzept {{name: $subject}})-[r:{predicate}*1..{max_hops}]->(end:Konzept {{name: $object}})
+                RETURN
+                  start.name AS subject,
+                  end.name AS object,
+                  length(path) AS hops,
+                  [node IN nodes(path) | node.name] AS path_nodes
+                ORDER BY hops ASC
+                LIMIT 100
+                """
+                params = {"subject": subject, "object": object}
+
+            elif subject:
+                # Only subject specified: find all reachable objects
+                cypher = f"""
+                MATCH path = (start:Konzept {{name: $subject}})-[r:{predicate}*1..{max_hops}]->(end:Konzept)
+                RETURN
+                  start.name AS subject,
+                  end.name AS object,
+                  length(path) AS hops,
+                  [node IN nodes(path) | node.name] AS path_nodes
+                ORDER BY hops ASC
+                LIMIT 100
+                """
+                params = {"subject": subject}
+
+            elif object:
+                # Only object specified: find all subjects that can reach it
+                cypher = f"""
+                MATCH path = (start:Konzept)-[r:{predicate}*1..{max_hops}]->(end:Konzept {{name: $object}})
+                RETURN
+                  start.name AS subject,
+                  end.name AS object,
+                  length(path) AS hops,
+                  [node IN nodes(path) | node.name] AS path_nodes
+                ORDER BY hops ASC
+                LIMIT 100
+                """
+                params = {"object": object}
+
+            else:
+                # Neither specified: return empty (too broad)
+                logger.warning(
+                    "query_transitive_path: Both subject and object are None - query too broad"
+                )
+                return []
+
+            result = self._safe_run(cypher, "query_transitive_path", **params)
+
+            paths = [
+                {
+                    "subject": record["subject"],
+                    "object": record["object"],
+                    "hops": record["hops"],
+                    "path": record["path_nodes"],
+                }
+                for record in result
+            ]
+
+            logger.debug(
+                f"Found {len(paths)} transitive paths "
+                f"(subject={subject}, predicate={predicate}, object={object}, max_hops={max_hops})"
+            )
+
+            return paths
+
+        except Exception as e:
+            logger.log_exception(
+                e,
+                f"query_transitive_path: Fehler (subject={subject}, predicate={predicate}, object={object})",
+            )
+            return []

@@ -16,7 +16,7 @@ refactoring (Task 5).
 
 import re
 import threading
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from neo4j import Driver
 
@@ -424,3 +424,153 @@ class RelationManager:
         except Exception as e:
             logger.log_exception(e, "get_node_count: Fehler")
             return 0
+
+    def _is_safe_relation_type(self, relation_type: str) -> bool:
+        """
+        Validate relation type format to prevent Cypher injection.
+
+        Relation types must be alphanumeric + underscore, starting with a letter.
+        This prevents malicious queries via user-controlled relation types.
+
+        Args:
+            relation_type: Relation type to validate
+
+        Returns:
+            True if valid and safe, False otherwise
+
+        Examples:
+            >>> _is_safe_relation_type("IS_A")
+            True
+            >>> _is_safe_relation_type("HAS_PROPERTY")
+            True
+            >>> _is_safe_relation_type("'; DROP TABLE;")
+            False
+        """
+        if not relation_type:
+            return False
+
+        # Must be alphanumeric + underscore, start with uppercase letter
+        pattern = r"^[A-Z_][A-Z0-9_]*$"
+        return bool(re.match(pattern, relation_type))
+
+    def create_specialized_node(
+        self,
+        label: str,
+        properties: Dict[str, Any],
+        link_to_word: Optional[str] = None,
+        relation_type: str = "EQUIVALENT_TO",
+    ) -> bool:
+        """
+        Create a specialized node with custom label (e.g., NumberNode, Operation).
+
+        Used by number language and spatial reasoning modules to create typed nodes
+        beyond the standard Wort/Konzept schema.
+
+        Args:
+            label: Node label (e.g., "NumberNode", "Operation", "SpatialObject")
+            properties: Dict of properties to set on the node (must include unique key)
+            link_to_word: Optional lemma to link via relation (creates Wort if needed)
+            relation_type: Relation type for word link (default: "EQUIVALENT_TO")
+
+        Returns:
+            True if successful, False otherwise
+
+        Example:
+            # Create NumberNode linked to word "fünf"
+            success = relation_mgr.create_specialized_node(
+                label="NumberNode",
+                properties={"value": 5, "word": "fünf"},
+                link_to_word="fünf",
+                relation_type="EQUIVALENT_TO"
+            )
+
+        Note:
+            - Label must be a valid Neo4j identifier (alphanumeric + underscore)
+            - Properties dict should include a unique key for MERGE operation
+            - If link_to_word is provided, a Wort node will be created if needed
+        """
+        if not self.driver:
+            logger.error("create_specialized_node: Kein DB-Driver verfügbar")
+            return False
+
+        # Validate label format (alphanumeric + underscore only)
+        if not re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", label):
+            logger.error(
+                f"create_specialized_node: Ungültiges Label '{label}' "
+                f"(nur alphanumerisch und Underscore erlaubt)"
+            )
+            return False
+
+        # Validate relation type if linking to word
+        if link_to_word and not self._is_safe_relation_type(relation_type):
+            logger.error(
+                f"create_specialized_node: Ungültiger Relation-Type '{relation_type}'"
+            )
+            return False
+
+        if not properties:
+            logger.error(
+                "create_specialized_node: Properties dict darf nicht leer sein"
+            )
+            return False
+
+        try:
+            with self._lock:
+                with self.driver.session(database="neo4j") as session:
+                    # Build MERGE clause from first property (assumed to be unique key)
+                    # For NumberNode: {"value": 5} -> MERGE (n:NumberNode {value: $value})
+                    # For Operation: {"name": "add"} -> MERGE (n:Operation {name: $name})
+                    primary_key = list(properties.keys())[0]
+                    merge_clause = (
+                        f"MERGE (n:{label} {{{primary_key}: ${primary_key}}})"
+                    )
+
+                    # Build SET clause for additional properties
+                    set_clause = "ON CREATE SET " + ", ".join(
+                        f"n.{key} = ${key}" for key in properties.keys()
+                    )
+
+                    # Build full query
+                    if link_to_word:
+                        # Create Wort node and link
+                        cypher = f"""
+                        MERGE (w:Wort {{lemma: $lemma}})
+                        {merge_clause}
+                        {set_clause}
+                        MERGE (w)-[r:{relation_type}]->(n)
+                        ON CREATE SET r.confidence = 1.0, r.source = 'specialized_node'
+                        RETURN n
+                        """
+                        params = {"lemma": link_to_word, **properties}
+                    else:
+                        # Just create specialized node
+                        cypher = f"""
+                        {merge_clause}
+                        {set_clause}
+                        RETURN n
+                        """
+                        params = properties
+
+                    result = session.run(cypher, params)
+                    record = result.single()
+
+                    if record:
+                        logger.info(
+                            f"Specialized node created: {label} "
+                            f"(properties: {properties}, linked_to: {link_to_word})"
+                        )
+                        return True
+                    else:
+                        logger.warning(
+                            f"create_specialized_node: Kein Record zurückgegeben für {label}"
+                        )
+                        return False
+
+        except Exception as e:
+            logger.log_exception(
+                e,
+                "create_specialized_node: Fehler",
+                label=label,
+                properties=properties,
+            )
+            return False

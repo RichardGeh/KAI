@@ -11,11 +11,11 @@ This module handles:
 
 from typing import Any, Dict, List, Optional
 
-from cachetools import TTLCache
 from neo4j import Driver
 
 from component_15_logging_config import get_logger
 from component_27_regex_validator import get_regex_validator
+from infrastructure.cache_manager import cache_manager
 
 logger = get_logger(__name__)
 
@@ -37,10 +37,8 @@ class KonzeptNetzwerkPatterns:
         """
         self.driver = driver
 
-        # Cache für Extraktionsregeln (10 Minuten TTL, da sich diese selten ändern)
-        self._extraction_rules_cache: TTLCache = TTLCache(
-            maxsize=50, ttl=600
-        )  # 600 Sekunden = 10 Minuten
+        # Cache für Extraktionsregeln (10 Minuten TTL, da sich diese selten ändern) via CacheManager
+        cache_manager.register_cache("extraction_rules", maxsize=50, ttl=600)
 
     def create_extraction_rule(self, relation_type: str, regex_pattern: str) -> bool:
         """
@@ -172,7 +170,7 @@ class KonzeptNetzwerkPatterns:
                     )
 
                     # Invalidiere Cache nach Änderung
-                    self._extraction_rules_cache.clear()
+                    cache_manager.invalidate("extraction_rules")
                     logger.debug(
                         "Extraktionsregeln-Cache invalidiert nach Regel-Änderung"
                     )
@@ -405,9 +403,10 @@ class KonzeptNetzwerkPatterns:
         cache_key = "all_extraction_rules"
 
         # Prüfe Cache
-        if cache_key in self._extraction_rules_cache:
+        cached_rules = cache_manager.get("extraction_rules", cache_key)
+        if cached_rules is not None:
             logger.debug("Cache-Hit für get_all_extraction_rules")
-            return self._extraction_rules_cache[cache_key]
+            return cached_rules
 
         with self.driver.session(database="neo4j") as session:
             result = session.run(
@@ -416,7 +415,7 @@ class KonzeptNetzwerkPatterns:
             rules = [record.data() for record in result]
 
             # In Cache speichern
-            self._extraction_rules_cache[cache_key] = rules
+            cache_manager.set("extraction_rules", cache_key, rules)
             logger.debug(
                 "Cache-Miss für get_all_extraction_rules",
                 extra={"rule_count": len(rules)},

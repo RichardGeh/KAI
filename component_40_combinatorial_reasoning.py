@@ -31,6 +31,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from component_15_logging_config import get_logger
 from component_16_probabilistic_engine import ProbabilisticEngine
 from component_17_proof_explanation import ProofStep, ProofTree, StepType
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 logger = get_logger(__name__)
 
@@ -736,7 +737,7 @@ class CombinatorialProbability:
 # ============================================================================
 
 
-class CombinatorialReasoner:
+class CombinatorialReasoner(BaseReasoningEngine):
     """
     Main reasoning engine for combinatorial problems.
 
@@ -872,6 +873,141 @@ class CombinatorialReasoner:
         )
 
         return best_eval.strategy, comparison_proof
+
+    # ========================================================================
+    # BaseReasoningEngine Interface Implementation
+    # ========================================================================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute combinatorial reasoning on the query.
+
+        Args:
+            query: Natural language query
+            context: Context with:
+                - "strategy": Strategy object to evaluate
+                - "n": Size of permutation space (default: 100)
+                - "problem_state": Problem specification
+                - "strategies": List of strategies to compare (for optimization)
+
+        Returns:
+            ReasoningResult with analysis and proof tree
+        """
+        try:
+            # Check if we're comparing strategies (optimization task)
+            if "strategies" in context:
+                strategies = context["strategies"]
+                problem_state = context.get("problem_state", {})
+
+                best_strategy, proof = self.find_optimal_strategy(
+                    strategies, problem_state
+                )
+
+                return ReasoningResult(
+                    success=True,
+                    answer=f"Optimal strategy: {best_strategy.name} (probability: {best_strategy.metadata.get('probability', 'N/A')})",
+                    confidence=1.0,
+                    proof_tree=proof,
+                    strategy_used="combinatorial_strategy_optimization",
+                    metadata={
+                        "best_strategy": best_strategy.name,
+                        "num_strategies_compared": len(strategies),
+                    },
+                )
+
+            # Check if we're analyzing a single strategy
+            elif "strategy" in context:
+                strategy = context["strategy"]
+                n = context.get("n", 100)
+
+                eval_result = self.evaluate_strategy_on_permutations(strategy, n)
+
+                return ReasoningResult(
+                    success=True,
+                    answer=f"Strategy {strategy.name} success probability: {eval_result.success_probability:.4f}",
+                    confidence=1.0,
+                    strategy_used="combinatorial_strategy_evaluation",
+                    metadata={
+                        "strategy_name": strategy.name,
+                        "success_probability": eval_result.success_probability,
+                        "expected_value": eval_result.expected_value,
+                        "n": n,
+                    },
+                )
+
+            # Check if we're analyzing a permutation
+            elif "permutation" in context:
+                perm = context["permutation"]
+                cycles, analysis = self.analyze_permutation(perm)
+
+                answer = (
+                    f"Permutation analysis: {analysis['num_cycles']} cycles, "
+                    f"max cycle length {analysis['max_cycle_length']}"
+                )
+
+                return ReasoningResult(
+                    success=True,
+                    answer=answer,
+                    confidence=1.0,
+                    strategy_used="combinatorial_permutation_analysis",
+                    metadata=analysis,
+                )
+
+            else:
+                # No valid context provided
+                logger.warning(
+                    "CombinatorialReasoner.reason() called without valid context",
+                    extra={"query": query, "context_keys": list(context.keys())},
+                )
+                return ReasoningResult(
+                    success=False,
+                    answer="Insufficient context for combinatorial reasoning",
+                    confidence=0.0,
+                    strategy_used="combinatorial_reasoning",
+                )
+
+        except Exception as e:
+            logger.error(
+                "Error in combinatorial reasoning",
+                extra={"query": query, "error": str(e)},
+                exc_info=True,
+            )
+            return ReasoningResult(
+                success=False,
+                answer=f"Combinatorial reasoning error: {str(e)}",
+                confidence=0.0,
+                strategy_used="combinatorial_reasoning",
+            )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        return [
+            "combinatorial",
+            "permutation_analysis",
+            "strategy_evaluation",
+            "probabilistic_combinatorics",
+            "cycle_analysis",
+            "strategy_optimization",
+        ]
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for combinatorial reasoning.
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+            Base cost: 0.6 (medium-expensive due to combinatorial complexity)
+        """
+        # Combinatorial reasoning can be expensive due to:
+        # - Permutation generation and analysis
+        # - Strategy evaluation on multiple samples
+        # - Cycle decomposition algorithms
+        base_cost = 0.6
+
+        # Query length adds minimal complexity
+        query_complexity = min(len(query) / 500.0, 0.1)
+
+        return min(base_cost + query_complexity, 1.0)
 
 
 # ============================================================================

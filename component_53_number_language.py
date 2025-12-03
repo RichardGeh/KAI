@@ -76,6 +76,9 @@ class NumberParser:
 
     def _load_learned_numbers(self):
         """Lädt gelernte Zahlen aus Neo4j"""
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Read-only initialization query for specialized node type (NumberNode)
+        # No matching facade method for querying EQUIVALENT_TO relations with NumberNode
         if not self.netzwerk:
             return
 
@@ -449,26 +452,29 @@ class ArithmeticConceptConnector:
             self._validate_concept_name(concept_lemma)
             self._validate_concept_name(operation_name)
 
-            query = """
-            MERGE (c:Konzept {name: $concept})
-            ON CREATE SET c.type = 'arithmetic_concept'
-            MERGE (o:Operation {name: $operation, symbol: $symbol})
-            ON CREATE SET o.type = 'arithmetic_operation'
-            MERGE (c)-[r:EQUIVALENT_TO]->(o)
-            ON CREATE SET r.confidence = 1.0, r.source = 'arithmetic_concepts'
-            ON MATCH SET r.confidence = 1.0, r.source = 'arithmetic_concepts'
-            RETURN c, o
-            """
+            # Use facade method for specialized node creation
+            # MIGRATION NOTE: Replaced direct session.run() with netzwerk.create_specialized_node()
+            # Original query lines 452-470 migrated to facade method (2025-12-03 Tier 2 Migration)
 
-            with self.netzwerk.driver.session() as session:
-                result = session.run(
-                    query,
-                    concept=concept_lemma,
-                    operation=operation_name,
-                    symbol=symbol,
-                )
-                record = result.single()
-                return record is not None
+            # First create Konzept for arithmetic concept
+            konzept_success = self.netzwerk.create_wort(
+                lemma=concept_lemma,
+                pos="NOUN",  # Arithmetic concepts are nouns (Summe, Produkt, etc.)
+            )
+
+            # Then create Operation node linked to the concept word
+            operation_success = self.netzwerk.create_specialized_node(
+                label="Operation",
+                properties={
+                    "name": operation_name,
+                    "symbol": symbol,
+                    "type": "arithmetic_operation",
+                },
+                link_to_word=concept_lemma,
+                relation_type="EQUIVALENT_TO",
+            )
+
+            return konzept_success and operation_success
 
         except ValueError as e:
             logger.warning(f"Invalid concept data: {e}")
@@ -487,6 +493,9 @@ class ArithmeticConceptConnector:
         Returns:
             Dict mit "operation" und "symbol" oder None
         """
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Read-only query for specialized node type (Operation)
+        # No matching facade method for querying EQUIVALENT_TO relations with Operation nodes
         concept_lemma = concept_word.lower().strip()
 
         try:
@@ -519,6 +528,9 @@ class ArithmeticConceptConnector:
         Returns:
             Konzeptwort oder None
         """
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Read-only query for specialized node type (Operation)
+        # No matching facade method for reverse EQUIVALENT_TO queries from Operation nodes
         operation_name = operation.lower().strip()
 
         try:
@@ -572,6 +584,10 @@ class ArithmeticConceptConnector:
         Returns:
             Anzahl der erfolgreich gespeicherten Konzepte
         """
+        # MIGRATION NOTE: Direct transaction access kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Batch initialization requires atomic transaction for all-or-nothing semantics
+        # Facade methods don't support multi-operation transactions yet
+        # This is a valid use case for direct access: batch initialization operations
         try:
             with self.netzwerk.driver.session() as session:
                 with session.begin_transaction() as tx:
@@ -639,6 +655,9 @@ class NumberLanguageConnector:
 
     def _ensure_indexes(self) -> None:
         """Create required indexes for number language operations."""
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Index creation operations (DDL, not DML)
+        # No matching facade method for schema/index management
         try:
             with self.netzwerk.driver.session() as session:
                 # Index for fast number value lookups
@@ -713,22 +732,24 @@ class NumberLanguageConnector:
             self._validate_word(word_lemma)
             self._validate_number_value(value)
 
-            query = """
-            MERGE (w:Wort {lemma: $word})
-            ON CREATE SET w.pos = 'NUM'
-            ON MATCH SET w.pos = 'NUM'
-            MERGE (n:NumberNode {value: $value})
-            ON CREATE SET n.word = $word
-            MERGE (w)-[r:EQUIVALENT_TO]->(n)
-            ON CREATE SET r.confidence = 1.0, r.source = 'number_language'
-            ON MATCH SET r.confidence = 1.0, r.source = 'number_language'
-            RETURN w, n
-            """
+            # Use facade method for specialized node creation
+            # MIGRATION NOTE: Replaced direct session.run() with netzwerk.create_specialized_node()
+            # Original query lines 716-730 migrated to facade method (2025-12-03 Tier 2 Migration)
 
-            with self.netzwerk.driver.session() as session:
-                result = session.run(query, word=word_lemma, value=value)
-                record = result.single()
-                return record is not None
+            # Create Wort node for number word
+            wort_success = self.netzwerk.create_wort(
+                lemma=word_lemma, pos="NUM"  # Number words have NUM POS tag
+            )
+
+            # Create NumberNode linked to word
+            number_success = self.netzwerk.create_specialized_node(
+                label="NumberNode",
+                properties={"value": value, "word": word_lemma},
+                link_to_word=word_lemma,
+                relation_type="EQUIVALENT_TO",
+            )
+
+            return wort_success and number_success
 
         except ValueError as e:
             logger.warning(f"Invalid number data: {e}")
@@ -747,6 +768,9 @@ class NumberLanguageConnector:
         Returns:
             Zahlenwert oder None
         """
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Read-only query for specialized node type (NumberNode)
+        # No matching facade method for querying EQUIVALENT_TO relations with NumberNode
         word_lemma = word.lower().strip()
 
         try:
@@ -776,6 +800,9 @@ class NumberLanguageConnector:
         Returns:
             Deutsches Zahlwort oder None
         """
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Read-only query for specialized node type (NumberNode)
+        # No matching facade method for reverse EQUIVALENT_TO queries from NumberNode
         try:
             query = """
             MATCH (n:NumberNode {value: $value})<-[:EQUIVALENT_TO]-(w:Wort)
@@ -803,6 +830,10 @@ class NumberLanguageConnector:
         Returns:
             Anzahl der erfolgreich gespeicherten Zahlen
         """
+        # MIGRATION NOTE: Direct transaction access kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Batch initialization requires atomic transaction for all-or-nothing semantics
+        # Facade methods don't support multi-operation transactions yet
+        # This is a valid use case for direct access: batch initialization operations
         try:
             with self.netzwerk.driver.session() as session:
                 with session.begin_transaction() as tx:

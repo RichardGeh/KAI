@@ -16,10 +16,10 @@ import threading
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from cachetools import TTLCache
 from neo4j import Driver
 
 from component_15_logging_config import get_logger
+from infrastructure.cache_manager import cache_manager
 
 logger = get_logger(__name__)
 
@@ -77,10 +77,8 @@ class KonzeptNetzwerkProductionRules:
         """
         self.driver = driver
 
-        # Cache für Production Rules (10 Minuten TTL, da sich diese selten ändern)
-        self._rule_cache: TTLCache = TTLCache(
-            maxsize=100, ttl=600
-        )  # 600 Sekunden = 10 Minuten
+        # Cache für Production Rules (10 Minuten TTL, da sich diese selten ändern) via CacheManager
+        cache_manager.register_cache("production_rules", maxsize=100, ttl=600)
 
         # Pending updates (für Batch-Processing)
         self._pending_stats_updates: Dict[str, Dict[str, Any]] = {}
@@ -169,8 +167,7 @@ class KonzeptNetzwerkProductionRules:
                     return False
 
                 # Cache invalidieren
-                if name in self._rule_cache:
-                    del self._rule_cache[name]
+                cache_manager.invalidate("production_rules", name)
 
                 logger.info(
                     f"Production Rule '{name}' erfolgreich erstellt/aktualisiert",
@@ -201,9 +198,10 @@ class KonzeptNetzwerkProductionRules:
             return None
 
         # Prüfe Cache
-        if name in self._rule_cache:
+        cached_rule = cache_manager.get("production_rules", name)
+        if cached_rule is not None:
             logger.debug(f"get_production_rule: Cache Hit für '{name}'")
-            return self._rule_cache[name]
+            return cached_rule
 
         try:
             with self.driver.session(database="neo4j") as session:
@@ -234,7 +232,7 @@ class KonzeptNetzwerkProductionRules:
                 rule_data = _deserialize_rule_record(record)
 
                 # Cache update
-                self._rule_cache[name] = rule_data
+                cache_manager.set("production_rules", name, rule_data)
 
                 logger.debug(f"get_production_rule: Regel '{name}' geladen")
                 return rule_data
@@ -399,8 +397,7 @@ class KonzeptNetzwerkProductionRules:
                         )
 
                     # Invalidiere Cache
-                    if rule_name in self._rule_cache:
-                        del self._rule_cache[rule_name]
+                    cache_manager.invalidate("production_rules", rule_name)
 
                 logger.info(
                     f"_flush_pending_stats: {len(self._pending_stats_updates)} Regeln aktualisiert"
@@ -627,16 +624,21 @@ class KonzeptNetzwerkProductionRules:
 
     def clear_cache(self):
         """Invalidiert den Rule-Cache."""
-        self._rule_cache.clear()
+        cache_manager.invalidate("production_rules")
         logger.debug("Production Rule Cache geleert")
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """Gibt Cache-Statistiken zurück."""
+        cache_stats = cache_manager.get_stats("production_rules")
+
         return {
             "rule_cache": {
-                "size": len(self._rule_cache),
-                "maxsize": self._rule_cache.maxsize,
-                "ttl": self._rule_cache.ttl,
+                "size": cache_stats["size"],
+                "maxsize": cache_stats["maxsize"],
+                "ttl": cache_stats["ttl"],
+                "hits": cache_stats["hits"],
+                "misses": cache_stats["misses"],
+                "hit_rate": cache_stats["hit_rate"],
             },
             "pending_updates": len(self._pending_stats_updates),
             "update_counter": self._update_counter,

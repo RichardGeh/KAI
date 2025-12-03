@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from component_1_netzwerk_core import KonzeptNetzwerkCore
 from component_15_logging_config import get_logger
 from component_17_proof_explanation import ProofTree
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 logger = get_logger(__name__)
 
@@ -66,7 +67,7 @@ class ArithmeticConfig:
             raise ValueError("max_total_relations must be >= 100")
 
 
-class ArithmeticEngine:
+class ArithmeticEngine(BaseReasoningEngine):
     """Main engine for arithmetic reasoning (thread-safe)"""
 
     def __init__(
@@ -215,3 +216,172 @@ class ArithmeticEngine:
     ):
         """Store calculation in Neo4j (optional)"""
         # TODO: Implement if needed
+
+    # ========================================================================
+    # BaseReasoningEngine Interface Implementation
+    # ========================================================================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute arithmetic reasoning on the query.
+
+        Args:
+            query: Natural language query
+            context: Context with:
+                - "operation": Arithmetic operation ("+", "-", "*", "/", "<", ">", "=", etc.)
+                - "operands": List of operands
+                - "property": Property to check ("even", "odd", "prime")
+                - "number": Number for property checking
+                - "relations": List of relations for transitive inference
+
+        Returns:
+            ReasoningResult with calculation result and proof tree
+        """
+        try:
+            # Check for property checking
+            if "property" in context and "number" in context:
+                property_name = context["property"]
+                number = context["number"]
+
+                result = self.check_property(number, property_name)
+
+                return ReasoningResult(
+                    success=True,
+                    answer=f"{number} is {'indeed' if result.value else 'not'} {property_name}",
+                    confidence=result.confidence,
+                    proof_tree=result.proof_tree,
+                    strategy_used="arithmetic_property_checking",
+                    metadata={
+                        "property": property_name,
+                        "number": number,
+                        "result": result.value,
+                    },
+                )
+
+            # Check for transitive inference
+            elif "relations" in context:
+                relations = context["relations"]
+                result = self.transitive_inference(relations)
+
+                return ReasoningResult(
+                    success=True,
+                    answer=f"Transitive inference result: {result.value}",
+                    confidence=result.confidence,
+                    proof_tree=result.proof_tree,
+                    strategy_used="arithmetic_transitive_inference",
+                    metadata={"num_relations": len(relations)},
+                )
+
+            # Check for comparison
+            elif "operation" in context and context["operation"] in [
+                "<",
+                ">",
+                "=",
+                "<=",
+                ">=",
+            ]:
+                operation = context["operation"]
+                operands = context.get("operands", [])
+
+                if len(operands) != 2:
+                    return ReasoningResult(
+                        success=False,
+                        answer="Comparison requires exactly 2 operands",
+                        confidence=0.0,
+                        strategy_used="arithmetic_reasoning",
+                    )
+
+                result = self.compare(operands[0], operands[1], operation)
+
+                return ReasoningResult(
+                    success=True,
+                    answer=f"{operands[0]} {operation} {operands[1]} is {result.value}",
+                    confidence=result.confidence,
+                    proof_tree=result.proof_tree,
+                    strategy_used="arithmetic_comparison",
+                    metadata={
+                        "operation": operation,
+                        "operands": operands,
+                        "result": result.value,
+                    },
+                )
+
+            # Standard arithmetic operation
+            elif "operation" in context and "operands" in context:
+                operation = context["operation"]
+                operands = context["operands"]
+
+                result = self.calculate(operation, *operands)
+
+                return ReasoningResult(
+                    success=True,
+                    answer=f"{operation}({', '.join(map(str, operands))}) = {result.value}",
+                    confidence=result.confidence,
+                    proof_tree=result.proof_tree,
+                    strategy_used="arithmetic_calculation",
+                    metadata={
+                        "operation": operation,
+                        "operands": operands,
+                        "result": result.value,
+                    },
+                )
+
+            else:
+                # No valid context provided
+                logger.warning(
+                    "ArithmeticEngine.reason() called without valid context",
+                    extra={"query": query, "context_keys": list(context.keys())},
+                )
+                return ReasoningResult(
+                    success=False,
+                    answer="Insufficient context for arithmetic reasoning",
+                    confidence=0.0,
+                    strategy_used="arithmetic_reasoning",
+                )
+
+        except Exception as e:
+            logger.error(
+                "Error in arithmetic reasoning",
+                extra={"query": query, "error": str(e)},
+                exc_info=True,
+            )
+            return ReasoningResult(
+                success=False,
+                answer=f"Arithmetic reasoning error: {str(e)}",
+                confidence=0.0,
+                strategy_used="arithmetic_reasoning",
+            )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        return [
+            "arithmetic",
+            "mathematical_operations",
+            "comparison",
+            "property_checking",
+            "transitive_inference",
+            "rational_arithmetic",
+            "decimal_arithmetic",
+            "modulo_arithmetic",
+            "power_arithmetic",
+        ]
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for arithmetic reasoning.
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+            Base cost: 0.2 (cheap, direct computation)
+        """
+        # Arithmetic reasoning is generally cheap:
+        # - Direct calculations are O(1) or O(n) for operands
+        # - Comparison is O(1)
+        # - Property checking varies (prime is O(sqrt(n)))
+        # - Transitive inference can be more expensive O(n^2) worst case
+        base_cost = 0.2
+
+        # Query complexity has minimal impact
+        query_complexity = min(len(query) / 500.0, 0.05)
+
+        return min(base_cost + query_complexity, 1.0)

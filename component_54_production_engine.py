@@ -16,9 +16,10 @@ from component_17_proof_explanation import ProofStep, ProofTree, StepType
 from component_54_production_rule import ProductionRule
 from component_54_production_state import ResponseGenerationState
 from component_54_production_types import RuleCategory
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 
-class ProductionSystemEngine:
+class ProductionSystemEngine(BaseReasoningEngine):
     """
     Recognize-Act Cycle Engine für das Produktionssystem.
 
@@ -508,6 +509,122 @@ class ProductionSystemEngine:
                 else None
             ),
         }
+
+    # ========================================================================
+    # BaseReasoningEngine Interface Implementation
+    # ========================================================================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute production system reasoning for response generation.
+
+        Args:
+            query: Natural language query
+            context: Context with:
+                - "state": ResponseGenerationState (required)
+                - "max_cycles": Maximum number of production cycles (default: 100)
+                - "goal": Goal to achieve (optional, default from state)
+
+        Returns:
+            ReasoningResult with generated response and proof tree
+        """
+        try:
+            # Extract state from context (required)
+            state = context.get("state")
+            if not state or not isinstance(state, ResponseGenerationState):
+                return ReasoningResult(
+                    success=False,
+                    answer="Production system requires ResponseGenerationState in context",
+                    confidence=0.0,
+                    strategy_used="production_system",
+                )
+
+            # Set max cycles if provided
+            max_cycles = context.get("max_cycles", 100)
+            state.max_cycles = max_cycles
+
+            # Run production system
+            final_state = self.generate(state)
+
+            # Extract result
+            success = final_state.goal_achieved
+            response_text = final_state.current_response
+            confidence = final_state.confidence
+
+            # Build answer
+            if success:
+                answer = response_text
+            else:
+                answer = (
+                    response_text if response_text else "Failed to generate response"
+                )
+
+            return ReasoningResult(
+                success=success,
+                answer=answer,
+                confidence=confidence,
+                proof_tree=final_state.proof_tree,
+                strategy_used="production_system_recognize_act",
+                metadata={
+                    "cycles": final_state.cycle_count,
+                    "rules_applied": len(final_state.applied_rules),
+                    "goal_achieved": final_state.goal_achieved,
+                    "response_quality": final_state.response_quality,
+                },
+            )
+
+        except Exception as e:
+            self.logger.error(
+                "Error in production system reasoning",
+                extra={"query": query, "error": str(e)},
+                exc_info=True,
+            )
+            return ReasoningResult(
+                success=False,
+                answer=f"Production system error: {str(e)}",
+                confidence=0.0,
+                strategy_used="production_system",
+            )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        return [
+            "production_rules",
+            "response_generation",
+            "conflict_resolution",
+            "recognize_act_cycle",
+            "rule_based_reasoning",
+            "discourse_management",
+            "content_generation",
+            "lexical_selection",
+            "syntactic_structuring",
+        ]
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for production system reasoning.
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+            Base cost: 0.5 (medium, depends on number of rules and cycles)
+        """
+        # Production system cost depends on:
+        # - Number of rules (more rules = higher matching cost)
+        # - Number of cycles (iterative process)
+        # - Conflict resolution overhead
+        # - ProofTree generation
+        base_cost = 0.5
+
+        # Rule count factor (more rules = higher cost)
+        if self.rules:
+            rule_factor = min(len(self.rules) / 100.0, 0.2)
+        else:
+            rule_factor = 0.0
+
+        # Query complexity
+        query_complexity = min(len(query) / 400.0, 0.1)
+
+        return min(base_cost + rule_factor + query_complexity, 1.0)
 
 
 # ============================================================================

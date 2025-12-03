@@ -60,6 +60,7 @@ from component_9_logik_engine_proof import (
     create_proof_tree_from_logic_engine,
 )
 from component_15_logging_config import get_logger
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 logger = get_logger(__name__)
 
@@ -68,7 +69,11 @@ logger = get_logger(__name__)
 
 
 class LogikEngine(
-    Engine, CSPReasoningMixin, ProofTrackingMixin, AdvancedReasoningMixin
+    Engine,
+    CSPReasoningMixin,
+    ProofTrackingMixin,
+    AdvancedReasoningMixin,
+    BaseReasoningEngine,
 ):
     """
     Unified Logic Engine combining all reasoning capabilities.
@@ -78,6 +83,7 @@ class LogikEngine(
     - CSPReasoningMixin: Constraint satisfaction problem solving
     - ProofTrackingMixin: Proof generation, tracking, and explanation
     - AdvancedReasoningMixin: SAT solving, consistency checking, contradiction detection
+    - BaseReasoningEngine: Standard interface for reasoning orchestration
 
     Features:
     - Forward chaining (run)
@@ -151,6 +157,113 @@ class LogikEngine(
             f"sat={self.use_sat}"
             f")"
         )
+
+    # ==================== BASE REASONING ENGINE INTERFACE ====================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute deductive reasoning on the query.
+
+        Args:
+            query: Natural language query to reason about
+            context: Context with working_memory, entities, query_type, etc.
+
+        Returns:
+            ReasoningResult with answer, confidence, and proof tree
+        """
+        # Extract goal from context or parse query
+        goal = context.get("goal")
+        if not goal:
+            # Attempt to create goal from query/entities
+            entities = context.get("entities", [])
+            if len(entities) >= 2:
+                goal = Goal(
+                    pred="IS_A", args={"subject": entities[0], "object": entities[1]}
+                )
+            else:
+                return ReasoningResult(
+                    success=False,
+                    answer="Keine gültige Abfrage für Logik-Engine",
+                    confidence=0.0,
+                    strategy_used="logic_engine",
+                )
+
+        # Run backward chaining with tracking
+        proof = self.run_with_tracking(goal, query=query)
+
+        # Check if goal was proven
+        success = proof is not None and len(proof) > 0
+        confidence = proof[0].confidence if success and proof else 0.0
+
+        # Convert to ProofTree
+        proof_tree = None
+        if success and UNIFIED_PROOFS_AVAILABLE:
+            proof_tree = create_proof_tree_from_logic_engine(proof, query)
+
+        answer = (
+            f"Ja, {query}" if success else f"Nein, {query} konnte nicht bewiesen werden"
+        )
+
+        return ReasoningResult(
+            success=success,
+            answer=answer,
+            confidence=confidence,
+            proof_tree=proof_tree,
+            strategy_used="logic_engine_backward_chaining",
+            metadata={
+                "rule_count": len(self.rules),
+                "fact_count": len(self.kb) + len(self.wm),
+                "proof_steps": len(proof) if proof else 0,
+            },
+        )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        capabilities = [
+            "deductive",
+            "forward_chaining",
+            "backward_chaining",
+            "rule_based_inference",
+        ]
+
+        if self.use_probabilistic and PROBABILISTIC_AVAILABLE:
+            capabilities.append("probabilistic")
+
+        if CONSTRAINT_REASONING_AVAILABLE:
+            capabilities.append("constraint_satisfaction")
+
+        if self.use_sat and SAT_SOLVER_AVAILABLE:
+            capabilities.extend(["sat_solving", "consistency_checking"])
+
+        return capabilities
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for reasoning about query.
+
+        Logic engine cost depends on:
+        - Number of rules (more rules = more expensive)
+        - Number of facts (larger KB = more expensive)
+        - Query complexity (estimated from query length/structure)
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+        """
+        # Base cost from rule/fact counts
+        rule_cost = min(len(self.rules) / 100.0, 0.4)  # Up to 0.4 for 100+ rules
+        fact_cost = min(
+            (len(self.kb) + len(self.wm)) / 500.0, 0.3
+        )  # Up to 0.3 for 500+ facts
+
+        # Query complexity (simple heuristic: length)
+        query_complexity = min(len(query) / 200.0, 0.2)  # Up to 0.2 for long queries
+
+        # Constraint reasoning adds cost
+        constraint_penalty = 0.1 if CONSTRAINT_REASONING_AVAILABLE else 0.0
+
+        total_cost = rule_cost + fact_cost + query_complexity + constraint_penalty
+
+        return min(total_cost, 1.0)
 
 
 # ==================== BACKWARDS COMPATIBILITY ====================

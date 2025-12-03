@@ -28,12 +28,14 @@ the original EpistemicEngine interface for backward compatibility.
 
 Autor: KAI Development Team
 Erstellt: 2025-11-01 | Refactored: 2025-11-28 (Task 12 - Phase 4)
+Updated: 2025-12-02 | Added BaseReasoningEngine interface (Phase 5)
 """
 
 from typing import Any, Dict, List, Optional
 
 from component_1_netzwerk import KonzeptNetzwerk
 from component_15_logging_config import get_logger
+from component_17_proof_explanation import ProofStep, ProofTree, StepType
 from component_35_belief_tracker import BeliefTracker
 
 # Import specialized modules
@@ -46,6 +48,7 @@ from component_35_epistemic_engine_core import (
     Proposition,
 )
 from component_35_nested_beliefs import NestedBeliefsHandler
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 logger = get_logger(__name__)
 
@@ -55,7 +58,7 @@ logger = get_logger(__name__)
 # ============================================================================
 
 
-class EpistemicEngine:
+class EpistemicEngine(BaseReasoningEngine):
     """
     Epistemic Logic Engine - Facade for Modular Architecture
 
@@ -432,6 +435,207 @@ class EpistemicEngine:
     def _ensure_state(self) -> None:
         """Ensure current_state is initialized"""
         self._core._ensure_state()
+
+    # ========================================================================
+    # BaseReasoningEngine Interface Implementation
+    # ========================================================================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute epistemic reasoning on the given query.
+
+        Context should contain:
+        - 'operation': One of 'K', 'M', 'E', 'C', 'K_n'
+        - 'agent_id' or 'agent_ids': Agent(s) to reason about
+        - 'proposition': Proposition ID
+        - 'nested_chain': For K_n operations
+
+        Args:
+            query: Query string describing the epistemic query
+            context: Context with operation and parameters
+
+        Returns:
+            ReasoningResult with truth value and explanation
+        """
+        operation = context.get("operation", "K")
+        proposition = context.get("proposition")
+
+        if proposition is None:
+            return ReasoningResult(
+                success=False,
+                answer="No proposition provided",
+                confidence=0.0,
+                strategy_used="epistemic_engine",
+                metadata={"error": "missing_proposition"},
+            )
+
+        # Execute based on operation
+        try:
+            if operation == "K":
+                agent_id = context.get("agent_id")
+                if not agent_id:
+                    return ReasoningResult(
+                        success=False,
+                        answer="No agent_id provided for K operator",
+                        confidence=0.0,
+                        strategy_used="epistemic_engine",
+                    )
+                result = self.K(agent_id, proposition)
+                answer = f"Agent {agent_id} {'knows' if result else 'does not know'} {proposition}"
+                confidence = 1.0 if result else 0.0
+
+            elif operation == "M":
+                agent_id = context.get("agent_id")
+                if not agent_id:
+                    return ReasoningResult(
+                        success=False,
+                        answer="No agent_id provided for M operator",
+                        confidence=0.0,
+                        strategy_used="epistemic_engine",
+                    )
+                result = self.M(agent_id, proposition)
+                answer = f"Agent {agent_id} {'considers possible' if result else 'rules out'} {proposition}"
+                confidence = 1.0 if result else 0.0
+
+            elif operation == "E":
+                agent_ids = context.get("agent_ids", [])
+                if not agent_ids:
+                    return ReasoningResult(
+                        success=False,
+                        answer="No agent_ids provided for E operator",
+                        confidence=0.0,
+                        strategy_used="epistemic_engine",
+                    )
+                result = self.E(agent_ids, proposition)
+                answer = f"{'Everyone in group' if result else 'Not everyone in group'} knows {proposition}"
+                confidence = 1.0 if result else 0.0
+
+            elif operation == "C":
+                agent_ids = context.get("agent_ids", [])
+                if not agent_ids:
+                    return ReasoningResult(
+                        success=False,
+                        answer="No agent_ids provided for C operator",
+                        confidence=0.0,
+                        strategy_used="epistemic_engine",
+                    )
+                max_iterations = context.get("max_iterations", 10)
+                result = self.C(agent_ids, proposition, max_iterations)
+                answer = f"{'Common knowledge' if result else 'Not common knowledge'} in group: {proposition}"
+                confidence = 1.0 if result else 0.0
+
+            elif operation == "K_n":
+                observer_id = context.get("observer_id")
+                nested_chain = context.get("nested_chain", [])
+                if not observer_id or not nested_chain:
+                    return ReasoningResult(
+                        success=False,
+                        answer="Missing observer_id or nested_chain for K_n",
+                        confidence=0.0,
+                        strategy_used="epistemic_engine",
+                    )
+                result = self.K_n(observer_id, nested_chain, proposition)
+                answer = f"Nested knowledge: {observer_id} knows chain {nested_chain} for {proposition}: {result}"
+                confidence = 1.0 if result else 0.0
+
+            else:
+                return ReasoningResult(
+                    success=False,
+                    answer=f"Unknown epistemic operation: {operation}",
+                    confidence=0.0,
+                    strategy_used="epistemic_engine",
+                    metadata={"error": "unknown_operation", "operation": operation},
+                )
+
+            # Create simple proof tree
+            proof_tree = ProofTree(
+                query=query,
+                root_steps=[
+                    ProofStep(
+                        step_id="epistemic_query",
+                        step_type=StepType.PREMISE,
+                        output=f"Epistemic query: {operation}",
+                        explanation_text=f"Modal operator {operation} applied",
+                        metadata={"operation": operation, "result": result},
+                        source_component="component_35_epistemic_engine",
+                    ),
+                    ProofStep(
+                        step_id="epistemic_result",
+                        step_type=StepType.CONCLUSION,
+                        output=answer,
+                        explanation_text=answer,
+                        confidence=confidence,
+                        parent_steps=["epistemic_query"],
+                        metadata={"truth_value": result},
+                        source_component="component_35_epistemic_engine",
+                    ),
+                ],
+            )
+
+            return ReasoningResult(
+                success=True,
+                answer=answer,
+                confidence=confidence,
+                proof_tree=proof_tree,
+                strategy_used=f"epistemic_engine_{operation}",
+                metadata={
+                    "operation": operation,
+                    "truth_value": result,
+                    "proposition": proposition,
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"Epistemic reasoning failed: {e}", exc_info=True)
+            return ReasoningResult(
+                success=False,
+                answer=f"Epistemic reasoning error: {str(e)}",
+                confidence=0.0,
+                strategy_used="epistemic_engine",
+                metadata={"error": str(e)},
+            )
+
+    def get_capabilities(self) -> List[str]:
+        """
+        Return epistemic reasoning capabilities.
+
+        Returns:
+            List of capability identifiers
+        """
+        return [
+            "epistemic",
+            "belief_reasoning",
+            "knowledge_reasoning",
+            "modal_logic",
+            "K_operator",
+            "M_operator",
+            "E_operator",
+            "C_operator",
+            "common_knowledge",
+            "nested_beliefs",
+            "agent_beliefs",
+            "multi_agent",
+        ]
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for epistemic reasoning.
+
+        Epistemic reasoning cost depends on:
+        - Simple K/M operators: Very cheap (graph lookup)
+        - E operator: Linear in number of agents
+        - C operator: Expensive (fixed-point iteration)
+        - K_n operator: Medium (recursive depth-limited search)
+
+        Args:
+            query: Query string (may contain hints about operation)
+
+        Returns:
+            Estimated cost in [0.0, 1.0] range
+        """
+        # Simple heuristic: most epistemic queries are fast lookups
+        # C and K_n can be more expensive
+        return 0.3  # Medium-low cost for typical epistemic queries
 
 
 # ============================================================================

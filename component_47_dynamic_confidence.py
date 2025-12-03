@@ -394,6 +394,7 @@ class DynamicConfidenceManager:
 
         try:
             with self._neo4j_lock:
+                # Use driver directly for episodic memory query (no facade method exists yet)
                 with self.netzwerk.driver.session(database="neo4j") as session:
                     result = session.run(
                         """

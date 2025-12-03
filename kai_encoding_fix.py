@@ -159,7 +159,10 @@ def print_safe(text: str, *args, **kwargs) -> None:
 
 # Deaktiviere Encoding-Fix bei pytest, da es mit Output-Capturing interferiert
 _is_pytest = (
-    "pytest" in sys.modules or "PYTEST_CURRENT_TEST" in __import__("os").environ
+    "pytest" in sys.modules
+    or "PYTEST_CURRENT_TEST" in __import__("os").environ
+    or any("pytest" in arg.lower() for arg in sys.argv)
+    or "_pytest" in sys.modules
 )
 
 # Versuche UTF-8 zu erzwingen (außer bei pytest)

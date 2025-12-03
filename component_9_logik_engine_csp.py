@@ -291,6 +291,10 @@ class CSPReasoningMixin:
             logger.warning(f"Invalid predicate rejected in domain building: {e}")
             return domain
 
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Specialized domain extraction query (distinct values, not paths)
+        # No matching facade method for "get all distinct subjects/objects of relation type"
+        # This is a valid use case for direct access: aggregate queries for domain building
         try:
             with self.netzwerk.driver.session(database="neo4j") as session:
                 if arg_key == "subject":

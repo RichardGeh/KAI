@@ -351,6 +351,9 @@ class Engine:
 
     def load_rules_from_graph(self, netzwerk: KonzeptNetzwerk):
         """Lädt alle Regeln aus dem Neo4j-Graphen."""
+        # MIGRATION NOTE: Direct session.run() kept here (2025-12-03 Tier 2 Migration)
+        # Reason: Specialized loader for Regel nodes with WENN/DANN relationships
+        # No matching facade method for complex rule loading with optional matches
         logger.info("Lade Regeln aus dem Wissensgraphen...")
         if not netzwerk or not netzwerk.driver:
             logger.error("Keine Netzwerkverbindung, kann Regeln nicht laden.")
@@ -649,110 +652,53 @@ class Engine:
         if not subject and not object_entity:
             return None
 
-        # Cypher-Query für Multi-Hop-Pfadsuche
-        # Beziehungen existieren zwischen Konzept-Nodes
-        with self.netzwerk.driver.session(database="neo4j") as session:
-            # Fall 1: Subject und Object bekannt - prüfe Pfad
-            if subject and object_entity:
-                query = (
-                    """
-                    MATCH path = (start:Konzept {name: $subject})-[r:%s*1..3]->(end:Konzept {name: $object})
-                    RETURN length(path) AS hops
-                    ORDER BY hops ASC
-                    LIMIT 1
-                """
-                    % validated_pred
-                )
-                result = session.run(
-                    query, subject=subject.lower(), object=object_entity.lower()
-                )
+        # Use facade method for transitive path queries
+        # MIGRATION NOTE: Replaced direct session.run() with netzwerk.query_transitive_path()
+        # Original queries lines 654-757 migrated to facade method (2025-12-03 Tier 2 Migration)
 
-                for record in result:
-                    # Pfad existiert
-                    derived_fact = Fact(
-                        pred=goal.pred,
-                        args={"subject": subject, "object": object_entity},
-                        confidence=1.0 / (1 + record["hops"]),
-                        source=f"graph_traversal:{goal.pred}",
-                    )
+        # Query transitive paths using facade method
+        paths = self.netzwerk.query_transitive_path(
+            subject=subject.lower() if subject else None,
+            predicate=validated_pred,
+            object=object_entity.lower() if object_entity else None,
+            max_hops=3,
+        )
 
-                    proof = ProofStep(
-                        goal=goal,
-                        method="graph_traversal",
-                        bindings={"?x": subject, "?y": object_entity},
-                        supporting_facts=[derived_fact],
-                        confidence=derived_fact.confidence,
-                    )
+        # Process first matching path (ordered by hops ascending in facade)
+        if paths:
+            first_path = paths[0]
 
-                    logger.info(
-                        f"  Graph-Pfad gefunden: {subject} -[{goal.pred}*{record['hops']}]-> {object_entity}"
-                    )
-                    return proof
+            # Create derived fact from path
+            derived_fact = Fact(
+                pred=goal.pred,
+                args={"subject": first_path["subject"], "object": first_path["object"]},
+                confidence=1.0 / (1 + first_path["hops"]),
+                source=f"graph_traversal:{goal.pred}",
+            )
 
-            # Fall 2: Subject bekannt, Object unbekannt
-            elif subject and not object_entity:
-                query = (
-                    """
-                    MATCH path = (start:Konzept {name: $subject})-[r:%s*1..3]->(end:Konzept)
-                    RETURN end.name AS object, length(path) AS hops
-                    ORDER BY hops ASC
-                    LIMIT 5
-                """
-                    % validated_pred
-                )
-                result = session.run(query, subject=subject.lower())
+            # Determine bindings based on what was queried
+            bindings = {}
+            if not subject:
+                bindings["?x"] = first_path["subject"]
+            else:
+                bindings["?x"] = subject
 
-                for record in result:
-                    # Erstelle Fakt aus Graph-Pfad
-                    derived_fact = Fact(
-                        pred=goal.pred,
-                        args={"subject": subject, "object": record["object"]},
-                        confidence=1.0 / (1 + record["hops"]),  # Abnehmende Confidence
-                        source=f"graph_traversal:{goal.pred}",
-                    )
+            if not object_entity:
+                bindings["?y"] = first_path["object"]
+            else:
+                bindings["?y"] = object_entity
 
-                    proof = ProofStep(
-                        goal=goal,
-                        method="graph_traversal",
-                        bindings={"?x": subject, "?y": record["object"]},
-                        supporting_facts=[derived_fact],
-                        confidence=derived_fact.confidence,
-                    )
+            proof = ProofStep(
+                goal=goal,
+                method="graph_traversal",
+                bindings=bindings,
+                supporting_facts=[derived_fact],
+                confidence=derived_fact.confidence,
+            )
 
-                    logger.info(
-                        f"  Graph-Pfad gefunden: {subject} -[{goal.pred}*{record['hops']}]-> {record['object']}"
-                    )
-                    return proof
-
-            # Fall 3: Object bekannt, Subject unbekannt (Rückwärtssuche)
-            elif object_entity and not subject:
-                query = (
-                    """
-                    MATCH path = (start:Konzept)-[r:%s*1..3]->(end:Konzept {name: $object})
-                    RETURN start.name AS subject, length(path) AS hops
-                    ORDER BY hops ASC
-                    LIMIT 5
-                """
-                    % validated_pred
-                )
-                result = session.run(query, object=object_entity.lower())
-
-                for record in result:
-                    derived_fact = Fact(
-                        pred=goal.pred,
-                        args={"subject": record["subject"], "object": object_entity},
-                        confidence=1.0 / (1 + record["hops"]),
-                        source=f"graph_traversal:{goal.pred}",
-                    )
-
-                    proof = ProofStep(
-                        goal=goal,
-                        method="graph_traversal",
-                        bindings={"?x": record["subject"], "?y": object_entity},
-                        supporting_facts=[derived_fact],
-                        confidence=derived_fact.confidence,
-                    )
-
-                    return proof
+            logger.info(
+                f"  Graph-Pfad gefunden: {first_path['subject']} -[{goal.pred}*{first_path['hops']}]-> {first_path['object']}"
+            )
+            return proof
 
         return None

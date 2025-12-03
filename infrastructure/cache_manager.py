@@ -184,17 +184,34 @@ class CacheManager:
 
         with self._cache_lock:
             # Check for duplicate
-            if name in self.caches and not overwrite:
-                raise ValueError(
-                    f"Cache '{name}' already registered. Use overwrite=True to replace."
-                )
+            if name in self.caches:
+                # If cache exists with same params, silently return (idempotent)
+                existing_policy = self.policies.get(name)
+                if (
+                    not overwrite
+                    and existing_policy
+                    and existing_policy.maxsize == maxsize
+                    and existing_policy.ttl == ttl
+                ):
+                    logger.debug(
+                        "Cache '%s' already registered with same params (maxsize=%d, ttl=%ds) - skipping",
+                        name,
+                        maxsize,
+                        ttl,
+                    )
+                    return
+                elif not overwrite:
+                    raise ValueError(
+                        f"Cache '{name}' already registered with different params. Use overwrite=True to replace."
+                    )
 
             # Create cache and policy
+            is_replacement = name in self.caches
             self.caches[name] = TTLCache(maxsize=maxsize, ttl=ttl)
             self.policies[name] = CachePolicy(maxsize=maxsize, ttl=ttl)
             self.statistics[name] = CacheStatistics(cache_name=name)
 
-            action = "replaced" if (name in self.caches and overwrite) else "registered"
+            action = "replaced" if is_replacement else "registered"
             logger.info(
                 "Cache %s: %s (maxsize=%d, ttl=%ds)",
                 action,
@@ -614,6 +631,15 @@ def reset_cache_manager() -> None:
 
             _cache_manager_instance = None
             logger.warning("CacheManager singleton reset (should only be used in tests)")
+
+
+# ============================================================================
+# Module-level singleton instance for convenient access
+# ============================================================================
+
+# Initialize the global singleton for direct import
+# Usage: from infrastructure.cache_manager import cache_manager
+cache_manager = get_cache_manager()
 
 
 # ============================================================================

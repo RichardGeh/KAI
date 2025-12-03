@@ -14,7 +14,6 @@ def test_resonance_engine_unicode_output():
     try:
         from component_44_resonance_engine import (
             ActivationMap,
-            ReasoningPath,
             ResonancePoint,
         )
 
@@ -23,7 +22,10 @@ def test_resonance_engine_unicode_output():
             activations={"test_konzept": 0.8, "resonanz_punkt": 0.9},
             resonance_points=[
                 ResonancePoint(
-                    concept="resonanz_punkt", resonance_boost=0.5, wave_depth=2, num_paths=3
+                    concept="resonanz_punkt",
+                    resonance_boost=0.5,
+                    wave_depth=2,
+                    num_paths=3,
                 )
             ],
         )
@@ -61,7 +63,6 @@ def test_logic_puzzle_solver_spacy_error():
     print("\nTest 2: Logic Puzzle Solver spaCy Error Handling...")
     try:
         from component_45_logic_puzzle_solver import (
-            LogicConditionParser,
             _get_nlp_model,
         )
 
@@ -91,7 +92,6 @@ def test_logic_puzzle_solver_exception_hierarchy():
     print("\nTest 3: Logic Puzzle Solver Exception-Hierarchie...")
     try:
         from component_45_logic_puzzle_solver import LogicPuzzleSolver
-        from kai_exceptions import ConstraintReasoningError, ParsingError
 
         solver = LogicPuzzleSolver()
 

@@ -27,12 +27,12 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional
 
-from cachetools import TTLCache
 from neo4j.exceptions import Neo4jError, ServiceUnavailable
 
 from component_15_logging_config import get_logger
 from component_46_meta_learning import MetaLearningEngine
 from component_confidence_manager import get_confidence_manager
+from infrastructure.cache_manager import cache_manager
 
 logger = get_logger(__name__)
 
@@ -216,14 +216,21 @@ class FeedbackHandler:
         self._lock = threading.RLock()  # For answer_records and feedback_records
         self._stats_lock = threading.Lock()  # Separate lock for statistics
 
-        # Bounded storage with TTL (thread-safe)
-        self.answer_records: TTLCache = TTLCache(
-            maxsize=self.config.max_answer_records, ttl=self.config.answer_ttl_seconds
+        # Bounded storage with TTL via CacheManager (thread-safe)
+        cache_manager.register_cache(
+            "feedback_answers",
+            maxsize=self.config.max_answer_records,
+            ttl=self.config.answer_ttl_seconds,
         )
-        self.feedback_records: TTLCache = TTLCache(
+        cache_manager.register_cache(
+            "feedback_records",
             maxsize=self.config.max_feedback_records,
             ttl=self.config.feedback_ttl_seconds,
         )
+
+        # Key tracking for iteration support (protected by _lock)
+        self._answer_keys: set = set()
+        self._feedback_keys: set = set()
 
         # Feedback Statistiken
         self.feedback_stats = {
@@ -383,7 +390,8 @@ class FeedbackHandler:
         )
 
         with self._lock:
-            self.answer_records[answer_id] = record
+            cache_manager.set("feedback_answers", answer_id, record)
+            self._answer_keys.add(answer_id)
 
         safe_query = self._sanitize_for_logging(query, max_len=50)
 
@@ -401,7 +409,7 @@ class FeedbackHandler:
     def get_answer(self, answer_id: str) -> Optional[AnswerRecord]:
         """Gibt AnswerRecord für gegebene ID zurück (thread-safe)"""
         with self._lock:
-            return self.answer_records.get(answer_id)
+            return cache_manager.get("feedback_answers", answer_id)
 
     # ========================================================================
     # Feedback Processing
@@ -499,7 +507,8 @@ class FeedbackHandler:
         )
 
         with self._lock:
-            self.feedback_records[feedback_id] = feedback_record
+            cache_manager.set("feedback_records", feedback_id, feedback_record)
+            self._feedback_keys.add(feedback_id)
 
         # Update Statistiken
         self._update_statistics(feedback_type)
@@ -837,7 +846,12 @@ class FeedbackHandler:
         """
         # Create snapshots with lock
         with self._lock:
-            feedback_snapshot = list(self.feedback_records.values())
+            # Retrieve all feedback records using tracked keys
+            feedback_snapshot = []
+            for key in self._feedback_keys:
+                record = cache_manager.get("feedback_records", key)
+                if record is not None:  # Skip if TTL expired
+                    feedback_snapshot.append(record)
 
         # Sort outside lock to minimize lock time
         sorted_feedbacks = sorted(
@@ -883,7 +897,7 @@ class FeedbackHandler:
         accuracy = (correct + 0.5 * partially) / total if total > 0 else 0.0
 
         with self._lock:
-            tracked_answers = len(self.answer_records)
+            tracked_answers = len(self._answer_keys)
 
         return {
             "total_feedbacks": total,
@@ -904,9 +918,18 @@ class FeedbackHandler:
             Dict[strategy_name, Dict[feedback_type, count]]
         """
         with self._lock:
-            # Create snapshots
-            feedback_snapshot = list(self.feedback_records.values())
-            answer_snapshot = dict(self.answer_records)
+            # Create snapshots using tracked keys
+            feedback_snapshot = []
+            for key in self._feedback_keys:
+                record = cache_manager.get("feedback_records", key)
+                if record is not None:
+                    feedback_snapshot.append(record)
+
+            answer_snapshot = {}
+            for key in self._answer_keys:
+                record = cache_manager.get("feedback_answers", key)
+                if record is not None:
+                    answer_snapshot[key] = record
 
         breakdown = {}
 
@@ -933,13 +956,16 @@ class FeedbackHandler:
     def get_memory_stats(self) -> Dict[str, int]:
         """Get current memory usage statistics"""
         with self._lock:
+            answer_count = len(self._answer_keys)
+            feedback_count = len(self._feedback_keys)
+
             return {
-                "answer_records_count": len(self.answer_records),
-                "feedback_records_count": len(self.feedback_records),
+                "answer_records_count": answer_count,
+                "feedback_records_count": feedback_count,
                 "answer_records_limit": self.config.max_answer_records,
                 "feedback_records_limit": self.config.max_feedback_records,
                 "memory_usage_mb": int(
-                    len(self.answer_records) * 0.01  # ~10KB per answer
-                    + len(self.feedback_records) * 0.005  # ~5KB per feedback
+                    answer_count * 0.01  # ~10KB per answer
+                    + feedback_count * 0.005  # ~5KB per feedback
                 ),
             }

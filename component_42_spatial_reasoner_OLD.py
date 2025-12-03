@@ -9,9 +9,8 @@ Date: 2025-11-14
 
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
-from cachetools import TTLCache
-
 from component_15_logging_config import get_logger
+from component_17_proof_explanation import ProofStep, ProofTree, StepType
 from component_42_spatial_grid import Grid
 from component_42_spatial_movement import MovementAction, MovementPlan
 from component_42_spatial_shapes import (
@@ -28,6 +27,8 @@ from component_42_spatial_types import (
     SpatialRelation,
     SpatialRelationType,
 )
+from infrastructure.cache_manager import cache_manager
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 
 logger = get_logger(__name__)
 
@@ -36,7 +37,7 @@ TRANSITIVE_CONFIDENCE_DECAY = 0.9  # Confidence reduction for transitive inferen
 DEFAULT_POSITION_TOLERANCE = 0.5  # Grid cells tolerance for position matching
 
 
-class SpatialReasoner:
+class SpatialReasoner(BaseReasoningEngine):
     """
     Main spatial reasoning engine for KAI.
 
@@ -56,8 +57,10 @@ class SpatialReasoner:
         """
         self.netzwerk = netzwerk
 
-        # Cache for spatial queries (5 minute TTL)
-        self._query_cache = TTLCache(maxsize=100, ttl=300)
+        # Cache for spatial queries (5 minute TTL) via CacheManager
+        cache_manager.register_cache(
+            "spatial_reasoner_old_queries", maxsize=100, ttl=300
+        )
 
         # Supported spatial relations
         self.spatial_relation_types = {rt.value for rt in SpatialRelationType}
@@ -124,7 +127,8 @@ class SpatialReasoner:
         self._performance_metrics["queries_total"] += 1
 
         # Check cache
-        if cache_key in self._query_cache:
+        cached_result = cache_manager.get("spatial_reasoner_old_queries", cache_key)
+        if cached_result is not None:
             self._performance_metrics["queries_cached"] += 1
             logger.debug(
                 "Cache hit for spatial query",
@@ -134,7 +138,7 @@ class SpatialReasoner:
                     / self._performance_metrics["queries_total"],
                 },
             )
-            return self._query_cache[cache_key]
+            return cached_result
 
         logger.info(
             "Inferring spatial relations",
@@ -195,7 +199,7 @@ class SpatialReasoner:
             return result
 
         # Only cache successful results
-        self._query_cache[cache_key] = result
+        cache_manager.set("spatial_reasoner_old_queries", cache_key, result)
 
         return result
 
@@ -407,9 +411,13 @@ class SpatialReasoner:
         """
         metrics = self._performance_metrics.copy()
 
-        # Add cache statistics
-        metrics["cache_size"] = len(self._query_cache)
-        metrics["cache_max_size"] = self._query_cache.maxsize
+        # Add cache statistics from CacheManager
+        cache_stats = cache_manager.get_stats("spatial_reasoner_old_queries")
+        metrics["cache_size"] = cache_stats["size"]
+        metrics["cache_max_size"] = cache_stats["maxsize"]
+        metrics["cache_hits_cm"] = cache_stats["hits"]
+        metrics["cache_misses_cm"] = cache_stats["misses"]
+        metrics["cache_hit_rate_cm"] = cache_stats["hit_rate"]
 
         if metrics["queries_total"] > 0:
             metrics["cache_hit_rate"] = (
@@ -547,7 +555,7 @@ class SpatialReasoner:
 
     def clear_cache(self):
         """Clear the query cache."""
-        self._query_cache.clear()
+        cache_manager.invalidate("spatial_reasoner_old_queries")
         logger.info("Spatial reasoning cache cleared")
 
     def add_position(
@@ -2746,6 +2754,250 @@ class SpatialReasoner:
         except Exception as e:
             logger.error("Error learning spatial rule: %s", str(e), exc_info=True)
             return False
+
+    # ========================================================================
+    # BaseReasoningEngine Interface Implementation
+    # ========================================================================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Execute spatial reasoning on the query.
+
+        Args:
+            query: Natural language query
+            context: Context with:
+                - "operation": Type of spatial operation ("infer_relation", "find_path", "grid_analysis")
+                - "obj1": First object/position
+                - "obj2": Second object/position (for relation/path)
+                - "grid_name": Grid name (for grid operations)
+                - "relation_type": Optional relation type filter
+
+        Returns:
+            ReasoningResult with spatial analysis and proof tree
+        """
+        try:
+            operation = context.get("operation", "infer_relation")
+
+            # Infer spatial relations
+            if operation == "infer_relation":
+                subject = context.get("obj1", context.get("subject"))
+                relation_type = context.get("relation_type")
+
+                if not subject:
+                    return ReasoningResult(
+                        success=False,
+                        answer="No subject provided for spatial relation inference",
+                        confidence=0.0,
+                        strategy_used="spatial_reasoning",
+                    )
+
+                # Convert string relation_type to SpatialRelationType if needed
+                if relation_type and isinstance(relation_type, str):
+                    try:
+                        relation_type = SpatialRelationType(relation_type)
+                    except ValueError:
+                        logger.warning(f"Invalid relation type: {relation_type}")
+                        relation_type = None
+
+                result = self.infer_spatial_relations(subject, relation_type)
+
+                # Build answer from relations
+                if result.direct_relations:
+                    relations_str = ", ".join(
+                        [
+                            f"{r.relation_type.value}({r.target})"
+                            for r in result.direct_relations[:5]
+                        ]
+                    )
+                    answer = f"Spatial relations for {subject}: {relations_str}"
+                else:
+                    answer = f"No spatial relations found for {subject}"
+
+                # Build proof tree
+                proof = ProofTree(conclusion=answer)
+                proof.add_root_step(
+                    ProofStep(
+                        step_type=StepType.PREMISE,
+                        content=f"Query spatial relations for {subject}",
+                        confidence=1.0,
+                    )
+                )
+                proof.add_root_step(
+                    ProofStep(
+                        step_type=StepType.RULE_APPLICATION,
+                        content=f"Found {len(result.direct_relations)} direct relations",
+                        confidence=result.confidence,
+                    )
+                )
+
+                return ReasoningResult(
+                    success=len(result.direct_relations) > 0,
+                    answer=answer,
+                    confidence=result.confidence,
+                    proof_tree=proof,
+                    strategy_used="spatial_relation_inference",
+                    metadata={
+                        "num_relations": len(result.direct_relations),
+                        "relation_type": (
+                            relation_type.value if relation_type else "ALL"
+                        ),
+                    },
+                )
+
+            # Find path between two objects
+            elif operation == "find_path":
+                obj1 = context.get("obj1")
+                obj2 = context.get("obj2")
+                grid_name = context.get("grid_name")
+
+                if not obj1 or not obj2:
+                    return ReasoningResult(
+                        success=False,
+                        answer="Both obj1 and obj2 required for pathfinding",
+                        confidence=0.0,
+                        strategy_used="spatial_reasoning",
+                    )
+
+                # Get positions
+                pos1 = self.get_object_position(obj1, grid_name) if grid_name else None
+                pos2 = self.get_object_position(obj2, grid_name) if grid_name else None
+
+                if not pos1 or not pos2:
+                    return ReasoningResult(
+                        success=False,
+                        answer=f"Could not find positions for {obj1} and/or {obj2}",
+                        confidence=0.0,
+                        strategy_used="spatial_pathfinding",
+                    )
+
+                # Find path (assumes grid exists)
+                grid = self.get_grid(grid_name) if grid_name else None
+                if not grid:
+                    return ReasoningResult(
+                        success=False,
+                        answer=f"Grid {grid_name} not found",
+                        confidence=0.0,
+                        strategy_used="spatial_pathfinding",
+                    )
+
+                path = self.find_path_between_positions(grid, pos1, pos2)
+
+                if path:
+                    answer = f"Path from {obj1} to {obj2}: {len(path)} steps"
+                    confidence = 1.0
+                else:
+                    answer = f"No path found from {obj1} to {obj2}"
+                    confidence = 0.0
+
+                # Build proof tree
+                proof = ProofTree(conclusion=answer)
+                proof.add_root_step(
+                    ProofStep(
+                        step_type=StepType.PREMISE,
+                        content=f"Find path: {obj1} -> {obj2}",
+                        confidence=1.0,
+                    )
+                )
+                if path:
+                    proof.add_root_step(
+                        ProofStep(
+                            step_type=StepType.RULE_APPLICATION,
+                            content=f"Path found with {len(path)} steps",
+                            confidence=confidence,
+                        )
+                    )
+
+                return ReasoningResult(
+                    success=path is not None,
+                    answer=answer,
+                    confidence=confidence,
+                    proof_tree=proof,
+                    strategy_used="spatial_pathfinding",
+                    metadata={"path_length": len(path) if path else 0},
+                )
+
+            # Grid analysis
+            elif operation == "grid_analysis":
+                grid_name = context.get("grid_name")
+
+                if not grid_name:
+                    return ReasoningResult(
+                        success=False,
+                        answer="Grid name required for grid analysis",
+                        confidence=0.0,
+                        strategy_used="spatial_reasoning",
+                    )
+
+                grid = self.get_grid(grid_name)
+                if not grid:
+                    return ReasoningResult(
+                        success=False,
+                        answer=f"Grid {grid_name} not found",
+                        confidence=0.0,
+                        strategy_used="spatial_grid_analysis",
+                    )
+
+                answer = f"Grid {grid_name}: {grid.rows}x{grid.cols} ({grid.rows * grid.cols} cells)"
+
+                return ReasoningResult(
+                    success=True,
+                    answer=answer,
+                    confidence=1.0,
+                    strategy_used="spatial_grid_analysis",
+                    metadata={"rows": grid.rows, "cols": grid.cols},
+                )
+
+            else:
+                return ReasoningResult(
+                    success=False,
+                    answer=f"Unknown spatial operation: {operation}",
+                    confidence=0.0,
+                    strategy_used="spatial_reasoning",
+                )
+
+        except Exception as e:
+            logger.error(
+                "Error in spatial reasoning",
+                extra={"query": query, "error": str(e)},
+                exc_info=True,
+            )
+            return ReasoningResult(
+                success=False,
+                answer=f"Spatial reasoning error: {str(e)}",
+                confidence=0.0,
+                strategy_used="spatial_reasoning",
+            )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        return [
+            "spatial",
+            "geometric_reasoning",
+            "path_finding",
+            "relation_inference",
+            "grid_reasoning",
+            "transitive_spatial_inference",
+            "position_tracking",
+        ]
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for spatial reasoning.
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+            Base cost: 0.5 (medium, depends on grid size)
+        """
+        # Spatial reasoning cost depends on:
+        # - Grid size (for pathfinding)
+        # - Number of objects (for relation inference)
+        # - Query complexity
+        base_cost = 0.5
+
+        # Query length adds minimal complexity
+        query_complexity = min(len(query) / 300.0, 0.15)
+
+        return min(base_cost + query_complexity, 1.0)
 
 
 # ============================================================================

@@ -276,10 +276,11 @@ class AdaptiveThresholdManager:
         Returns:
             Anzahl als Integer
         """
-        if not self.netzwerk.driver:
+        if not self.netzwerk or not self.netzwerk.driver:
             return 0
 
         try:
+            # Use driver directly for this specialized query (no facade method exists yet)
             with self.netzwerk.driver.session() as session:
                 query = """
                 MATCH ()-[c:CONNECTION]->()

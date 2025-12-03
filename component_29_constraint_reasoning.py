@@ -20,6 +20,7 @@ from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 from component_15_logging_config import get_logger
 from component_17_proof_explanation import ProofStep, ProofTree, StepType
+from infrastructure.interfaces import BaseReasoningEngine, ReasoningResult
 from kai_exceptions import ConstraintReasoningError
 
 logger = get_logger(__name__)
@@ -267,7 +268,7 @@ class ConstraintProblem:
             var.reset_domain()
 
 
-class ConstraintSolver:
+class ConstraintSolver(BaseReasoningEngine):
     """
     Generic CSP solver using backtracking with constraint propagation.
 
@@ -277,6 +278,8 @@ class ConstraintSolver:
     - MRV (Minimum Remaining Values) variable selection
     - LCV (Least Constraining Value) value ordering
     - ProofTree generation for solution tracking
+
+    Implements BaseReasoningEngine for integration with reasoning orchestrator.
     """
 
     def __init__(
@@ -691,6 +694,87 @@ class ConstraintSolver:
         else:
             # Default: Return domain as-is
             return list(var.domain)
+
+    # ==================== BASE REASONING ENGINE INTERFACE ====================
+
+    def reason(self, query: str, context: Dict[str, Any]) -> ReasoningResult:
+        """
+        Solve a constraint satisfaction problem.
+
+        Args:
+            query: Problem description
+            context: Context with 'problem' (ConstraintProblem) or problem parameters
+
+        Returns:
+            ReasoningResult with solution
+        """
+        problem = context.get("problem")
+        if not problem and self.problem:
+            problem = self.problem
+
+        if not problem:
+            return ReasoningResult(
+                success=False,
+                answer="No constraint problem provided",
+                confidence=0.0,
+                strategy_used="constraint_satisfaction",
+            )
+
+        # Solve the problem
+        solution, proof_tree = self.solve(problem, track_proof=True)
+
+        if solution:
+            answer = f"Solution found: {solution}"
+            return ReasoningResult(
+                success=True,
+                answer=answer,
+                confidence=1.0,  # CSP solutions are definitive
+                proof_tree=proof_tree,
+                strategy_used="constraint_satisfaction_backtracking",
+                metadata={
+                    "solution": solution,
+                    "backtracks": self.backtrack_count,
+                    "constraint_checks": self.constraint_checks,
+                },
+            )
+        else:
+            return ReasoningResult(
+                success=False,
+                answer="No solution exists for this constraint problem",
+                confidence=0.0,
+                proof_tree=proof_tree,
+                strategy_used="constraint_satisfaction",
+            )
+
+    def get_capabilities(self) -> List[str]:
+        """Return list of reasoning capabilities."""
+        capabilities = ["constraint_satisfaction", "csp_solving", "backtracking"]
+        if self.use_ac3:
+            capabilities.append("arc_consistency")
+        if self.use_mrv:
+            capabilities.append("mrv_heuristic")
+        if self.use_lcv:
+            capabilities.append("lcv_heuristic")
+        return capabilities
+
+    def estimate_cost(self, query: str) -> float:
+        """
+        Estimate computational cost for CSP solving.
+
+        CSP can be very expensive depending on problem size.
+
+        Returns:
+            Cost estimate in [0.0, 1.0] range
+        """
+        # CSP solving is expensive
+        base_cost = 0.8
+
+        # Query complexity
+        query_complexity = min(len(query) / 200.0, 0.15)
+
+        total_cost = base_cost + query_complexity
+
+        return min(total_cost, 1.0)
 
 
 # Helper functions for common constraint types
