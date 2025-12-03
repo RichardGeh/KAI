@@ -326,7 +326,7 @@ class Engine:
         self.kb_checker: Optional[KnowledgeBaseChecker] = None
 
         if self.use_sat:
-            self.sat_solver = DPLLSolver(use_watched_literals=True)
+            self.sat_solver = DPLLSolver(enable_proof=False)
             self.kb_checker = KnowledgeBaseChecker(self.sat_solver)
             logger.info(
                 "Logik-Engine initialisiert mit SAT-Solver für Boolean Reasoning."

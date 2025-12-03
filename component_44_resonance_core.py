@@ -349,7 +349,11 @@ class ResonanceEngine(BaseReasoningEngine):
 
         # Cache Key generieren
         relations_str = json.dumps(sorted(allowed_relations or []))
-        cache_key = f"{concept}|{current_activation:.3f}|{relations_str}"
+        # Include min_confidence to avoid cache collisions with different thresholds
+        min_conf_for_key = self.activation_threshold / max(current_activation, 0.01)
+        cache_key = (
+            f"{concept}|{current_activation:.3f}|{min_conf_for_key:.3f}|{relations_str}"
+        )
 
         # Cache Lookup
         cached_neighbors = cache_manager.get("resonance_neighbors", cache_key)
@@ -404,7 +408,7 @@ class ResonanceEngine(BaseReasoningEngine):
                     logger.error(f"Neo4j-Query fehlgeschlagen für '{concept}': {e}")
                     raise Neo4jQueryError(
                         "Fehler beim Abrufen von Nachbarn",
-                        query="query_semantic_neighbors facade method",
+                        query=f"Facade: KonzeptNetzwerk.query_semantic_neighbors(lemma='{concept}', ...)",
                         parameters={
                             "lemma": concept,
                             "allowed_relations": allowed_relations,

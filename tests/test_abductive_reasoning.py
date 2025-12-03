@@ -679,7 +679,7 @@ class TestEdgeCases:
     def test_query_nonexistent_hypothesis(self, netzwerk):
         """Test: Query nicht-existierende Hypothese"""
         explanation = netzwerk.explain_hypothesis("nonexistent-hyp-id-12345")
-        assert "nicht gefunden" in explanation.lower()
+        assert "not found" in explanation.lower()
 
     def test_store_hypothesis_without_observations(self, netzwerk):
         """Test: Hypothese ohne Beobachtungen"""

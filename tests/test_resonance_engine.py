@@ -47,6 +47,32 @@ from component_44_resonance_engine import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clear_resonance_caches():
+    """Clear resonance caches before each test to prevent cache pollution."""
+    from infrastructure.cache_manager import cache_manager
+
+    # Clear caches if they exist (they may not be registered yet at test start)
+    try:
+        cache_manager.invalidate("resonance_activations")
+    except ValueError:
+        pass  # Cache not registered yet
+    try:
+        cache_manager.invalidate("resonance_neighbors")
+    except ValueError:
+        pass  # Cache not registered yet
+    yield
+    # Cleanup after test
+    try:
+        cache_manager.invalidate("resonance_activations")
+    except ValueError:
+        pass
+    try:
+        cache_manager.invalidate("resonance_neighbors")
+    except ValueError:
+        pass
+
+
 class TestResonanceEngineBasics:
     """Test basic ResonanceEngine functionality"""
 
@@ -87,7 +113,7 @@ class TestResonanceEngineBasics:
     def test_empty_graph_handling(self):
         """Test 3: Handle activation on empty graph"""
         netzwerk = Mock()
-        netzwerk.execute_query.return_value = []
+        netzwerk.query_semantic_neighbors = Mock(return_value=[])
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("test")
@@ -107,20 +133,20 @@ class TestSingleHopActivation:
         netzwerk = Mock()
 
         # Mock neighbors: apfel -> frucht (IS_A, conf=0.9), then stop
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "apfel":
                 return [
                     {
                         "neighbor": "frucht",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     }
                 ]
-            else:
-                return []  # frucht has no further neighbors
+            return []  # frucht has no further neighbors
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("apfel")
@@ -138,9 +164,11 @@ class TestSingleHopActivation:
         netzwerk = Mock()
 
         # Mock neighbors with low confidence
-        netzwerk.execute_query.return_value = [
-            {"neighbor": "ding", "relation_type": "IS_A", "base_confidence": 0.3}
-        ]
+        netzwerk.query_semantic_neighbors = Mock(
+            return_value=[
+                {"neighbor": "ding", "relation_type": "IS_A", "confidence": 0.3}
+            ]
+        )
 
         engine = ResonanceEngine(netzwerk)
         engine.activation_threshold = 0.3
@@ -159,14 +187,15 @@ class TestMultiHopSpread:
         """Test 6: Activation spreads across 2 hops"""
         netzwerk = Mock()
 
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "apfel":
                 return [
                     {
                         "neighbor": "frucht",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     }
                 ]
             elif lemma == "frucht":
@@ -174,13 +203,12 @@ class TestMultiHopSpread:
                     {
                         "neighbor": "nahrung",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.8,
+                        "confidence": 0.8,
                     }
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("apfel")
@@ -198,17 +226,18 @@ class TestMultiHopSpread:
         netzwerk = Mock()
 
         # Mock infinite chain
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             return [
                 {
                     "neighbor": f"concept_{lemma}_next",
                     "relation_type": "IS_A",
-                    "base_confidence": 0.9,
+                    "confidence": 0.9,
                 }
             ]
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         engine.max_waves = 2
@@ -228,9 +257,10 @@ class TestResonanceAmplification:
 
         call_count = [0]
 
-        def mock_query(cypher, params):
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             call_count[0] += 1
-            lemma = params["lemma"]
 
             # Wave 0: apfel -> frucht, obst
             if lemma == "apfel":
@@ -238,12 +268,12 @@ class TestResonanceAmplification:
                     {
                         "neighbor": "frucht",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     },
                     {
                         "neighbor": "obst",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.8,
+                        "confidence": 0.8,
                     },
                 ]
             # Wave 1: frucht -> nahrung, obst -> nahrung (CONVERGENCE!)
@@ -252,7 +282,7 @@ class TestResonanceAmplification:
                     {
                         "neighbor": "nahrung",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.85,
+                        "confidence": 0.85,
                     }
                 ]
             elif lemma == "obst":
@@ -260,13 +290,12 @@ class TestResonanceAmplification:
                     {
                         "neighbor": "nahrung",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.85,
+                        "confidence": 0.85,
                     }
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("apfel")
@@ -283,19 +312,20 @@ class TestResonanceAmplification:
         """Test 9: Resonance points are tracked correctly"""
         netzwerk = Mock()
 
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "start":
                 return [
                     {
                         "neighbor": "mid1",
                         "relation_type": "REL",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     },
                     {
                         "neighbor": "mid2",
                         "relation_type": "REL",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     },
                 ]
             elif lemma in ["mid1", "mid2"]:
@@ -303,13 +333,12 @@ class TestResonanceAmplification:
                     {
                         "neighbor": "target",
                         "relation_type": "REL",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     }
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("start")
@@ -332,21 +361,21 @@ class TestPruningPerformance:
         netzwerk = Mock()
 
         # Mock 200 neighbors
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "start":
                 return [
                     {
                         "neighbor": f"concept_{i}",
                         "relation_type": "REL",
-                        "base_confidence": 0.8,
+                        "confidence": 0.8,
                     }
                     for i in range(200)
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         engine.max_concepts_per_wave = 50
@@ -361,21 +390,21 @@ class TestPruningPerformance:
         """Test 11: Low activation concepts are filtered"""
         netzwerk = Mock()
 
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "start":
                 return [
                     {
                         "neighbor": "high",
                         "relation_type": "REL",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     },
-                    {"neighbor": "low", "relation_type": "REL", "base_confidence": 0.2},
+                    {"neighbor": "low", "relation_type": "REL", "confidence": 0.2},
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         engine.activation_threshold = 0.5
@@ -396,29 +425,30 @@ class TestContextFiltering:
         netzwerk = Mock()
 
         # Mock multiple relation types
-        def mock_query(cypher, params):
-            allowed = params["allowed_relations"]
-            lemma = params["lemma"]
-
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "apfel":
                 results = [
                     {
                         "neighbor": "frucht",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     },
                     {
                         "neighbor": "rot",
                         "relation_type": "HAS_PROPERTY",
-                        "base_confidence": 0.8,
+                        "confidence": 0.8,
                     },
                 ]
-                if allowed:
-                    return [r for r in results if r["relation_type"] in allowed]
+                if allowed_relations:
+                    return [
+                        r for r in results if r["relation_type"] in allowed_relations
+                    ]
                 return results
             return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
 
@@ -589,20 +619,20 @@ class TestDynamicConfidence:
         # Mock dynamic confidence higher than base
         confidence_mgr.get_current_confidence.return_value = 0.95
 
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "apfel":
                 return [
                     {
                         "neighbor": "frucht",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.7,
+                        "confidence": 0.7,
                     }
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk, confidence_mgr)
         activation_map = engine.activate_concept("apfel")
@@ -620,20 +650,20 @@ class TestDynamicConfidence:
         # Mock confidence manager failure
         confidence_mgr.get_current_confidence.side_effect = Exception("Lookup failed")
 
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "apfel":
                 return [
                     {
                         "neighbor": "frucht",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.8,
+                        "confidence": 0.8,
                     }
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk, confidence_mgr)
         activation_map = engine.activate_concept("apfel")
@@ -652,25 +682,25 @@ class TestBidirectionalRelations:
         netzwerk = Mock()
 
         # Mock bidirectional relations
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "apfel":
                 return [
                     {
                         "neighbor": "frucht",
                         "relation_type": "IS_A",
-                        "base_confidence": 0.9,
+                        "confidence": 0.9,
                     },
                     {
                         "neighbor": "baum",
                         "relation_type": "PART_OF",
-                        "base_confidence": 0.8,
+                        "confidence": 0.8,
                     },
                 ]
-            else:
-                return []
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("apfel")
@@ -687,25 +717,21 @@ class TestComplexGraphStructures:
         """Test 25: Diamond pattern (A->B,C; B,C->D) creates resonance"""
         netzwerk = Mock()
 
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "a":
                 return [
-                    {"neighbor": "b", "relation_type": "REL", "base_confidence": 0.9},
-                    {"neighbor": "c", "relation_type": "REL", "base_confidence": 0.9},
+                    {"neighbor": "b", "relation_type": "REL", "confidence": 0.9},
+                    {"neighbor": "c", "relation_type": "REL", "confidence": 0.9},
                 ]
             elif lemma == "b":
-                return [
-                    {"neighbor": "d", "relation_type": "REL", "base_confidence": 0.9}
-                ]
+                return [{"neighbor": "d", "relation_type": "REL", "confidence": 0.9}]
             elif lemma == "c":
-                return [
-                    {"neighbor": "d", "relation_type": "REL", "base_confidence": 0.9}
-                ]
-            else:
-                return []
+                return [{"neighbor": "d", "relation_type": "REL", "confidence": 0.9}]
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("a")
@@ -723,22 +749,17 @@ class TestComplexGraphStructures:
         netzwerk = Mock()
 
         # Mock cyclic graph: a->b->c->a
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             cycles = {
-                "a": [
-                    {"neighbor": "b", "relation_type": "REL", "base_confidence": 0.9}
-                ],
-                "b": [
-                    {"neighbor": "c", "relation_type": "REL", "base_confidence": 0.9}
-                ],
-                "c": [
-                    {"neighbor": "a", "relation_type": "REL", "base_confidence": 0.9}
-                ],
+                "a": [{"neighbor": "b", "relation_type": "REL", "confidence": 0.9}],
+                "b": [{"neighbor": "c", "relation_type": "REL", "confidence": 0.9}],
+                "c": [{"neighbor": "a", "relation_type": "REL", "confidence": 0.9}],
             }
             return cycles.get(lemma, [])
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         engine.max_waves = 10
@@ -756,7 +777,7 @@ class TestEdgeCases:
     def test_isolated_concept(self):
         """Test 27: Isolated concept (no neighbors)"""
         netzwerk = Mock()
-        netzwerk.execute_query.return_value = []
+        netzwerk.query_semantic_neighbors = Mock(return_value=[])
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("isolated")
@@ -768,7 +789,9 @@ class TestEdgeCases:
     def test_neo4j_query_error(self):
         """Test 28: Handles Neo4j query errors gracefully"""
         netzwerk = Mock()
-        netzwerk.execute_query.side_effect = Exception("Connection error")
+        netzwerk.query_semantic_neighbors = Mock(
+            side_effect=Exception("Connection error")
+        )
 
         engine = ResonanceEngine(netzwerk)
 
@@ -782,16 +805,14 @@ class TestEdgeCases:
         """Test 29: Zero confidence relations are filtered"""
         netzwerk = Mock()
 
-        def mock_query(cypher, params):
-            lemma = params["lemma"]
+        def mock_semantic_neighbors(
+            lemma, allowed_relations=None, min_confidence=0.0, limit=50
+        ):
             if lemma == "start":
-                return [
-                    {"neighbor": "zero", "relation_type": "REL", "base_confidence": 0.0}
-                ]
-            else:
-                return []
+                return [{"neighbor": "zero", "relation_type": "REL", "confidence": 0.0}]
+            return []
 
-        netzwerk.execute_query = mock_query
+        netzwerk.query_semantic_neighbors = mock_semantic_neighbors
 
         engine = ResonanceEngine(netzwerk)
         activation_map = engine.activate_concept("start")
