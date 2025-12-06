@@ -276,6 +276,7 @@ class LogicConditionParser:
                     or self._parse_conjunction(sentence)
                     or self._parse_disjunction(sentence)
                     or self._parse_negation(sentence)
+                    or self._parse_simple_fact(sentence)
                 )
 
                 if condition:
@@ -508,6 +509,34 @@ class LogicConditionParser:
                 context={"sentence": sentence},
                 original_exception=e,
             )
+
+    def _parse_simple_fact(self, sentence: str) -> Optional[LogicCondition]:
+        """
+        Parse simple entity-property facts.
+
+        Patterns:
+        - "Leo trinkt Tee" -> Variable("Leo", "trinkt_tee") = True
+        - "Mark ist aktiv" -> Variable("Mark", "ist_aktiv") = True
+
+        Returns LogicCondition if exactly 1 variable found, None otherwise.
+        """
+        try:
+            # Extract variables from sentence
+            variables = self._extract_variables(sentence)
+
+            if len(variables) == 1:
+                # Create a simple fact condition with positive variable
+                # SIMPLE_FACT means this variable is TRUE
+                return LogicCondition(
+                    condition_type="SIMPLE_FACT",
+                    operands=[variables[0]],  # Use operands, not variables
+                    text=sentence,
+                )
+
+            return None
+        except Exception as e:
+            logger.warning(f"Error parsing simple fact '{sentence}': {e}")
+            return None
 
     def _extract_variables(self, text: str) -> List[str]:
         """

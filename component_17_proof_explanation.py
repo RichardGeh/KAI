@@ -25,6 +25,7 @@ class StepType(Enum):
     """Types of reasoning steps"""
 
     FACT_MATCH = "fact_match"  # Direct fact lookup
+    QUERY = "query"  # Query step
     RULE_APPLICATION = "rule_application"  # Logical rule applied
     INFERENCE = "inference"  # General inference
     HYPOTHESIS = "hypothesis"  # Abductive hypothesis generation
@@ -508,6 +509,9 @@ def generate_explanation_text(
     if step_type == StepType.FACT_MATCH:
         return f"Fand Fakt direkt in der Wissensbasis: '{output}'"
 
+    elif step_type == StepType.QUERY:
+        return f"Abfrage ausgefuehrt: '{output}'"
+
     elif step_type == StepType.RULE_APPLICATION:
         rule_str = f" '{rule_name}'" if rule_name else ""
         input_str = f" mit {len(inputs)} Prämissen" if inputs else ""
@@ -637,6 +641,7 @@ def _get_step_icon(step_type: StepType) -> str:
     """Get icon for step type (cp1252-safe)"""
     icons = {
         StepType.FACT_MATCH: "[INFO]",
+        StepType.QUERY: "[ABFRAGE]",
         StepType.RULE_APPLICATION: "[REGEL]",
         StepType.INFERENCE: "[FOLGERUNG]",
         StepType.HYPOTHESIS: "[HYPOTHESE]",

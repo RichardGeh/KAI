@@ -187,22 +187,22 @@ class AdaptiveThresholdManager:
         if phase == BootstrapPhase.COLD_START:
             return {
                 "auto_correct": 999.0,  # Permanently disabled - ask_user strategy preferred for safety (prevents incorrect automatic corrections)
-                "ask_user": 0.80,  # Frage bei hoher Confidence
-                "min_confidence": 0.70,
+                "ask_user": 0.95,  # Very conservative - only flag high-confidence typos to reduce false positives
+                "min_confidence": 0.85,
                 "description": "cold_start: Keine Auto-Korrektur (nur ask_user)",
             }
         elif phase == BootstrapPhase.WARMING:
             return {
                 "auto_correct": 999.0,  # Permanently disabled - ask_user strategy preferred for safety (prevents incorrect automatic corrections)
-                "ask_user": 0.60,  # Frage bei mittlerer Confidence
-                "min_confidence": 0.50,
+                "ask_user": 0.90,  # Conservative - reduced false positives on normal German words
+                "min_confidence": 0.80,
                 "description": "warming: Keine Auto-Korrektur (nur ask_user)",
             }
         else:  # MATURE
             return {
                 "auto_correct": 999.0,  # Permanently disabled - ask_user strategy preferred for safety (prevents incorrect automatic corrections)
-                "ask_user": 0.50,  # Frage bei mittlerer Confidence
-                "min_confidence": 0.40,
+                "ask_user": 0.85,  # Moderate - balance between typo detection and false positives
+                "min_confidence": 0.70,
                 "description": "mature: Keine Auto-Korrektur (nur ask_user)",
             }
 

@@ -13,7 +13,7 @@ KEINE UNICODE-ZEICHEN: Nutzt ASCII-Text (AND, OR, NOT, IMPLIES, XOR)
 
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Set
+from typing import Any, Dict, List, Optional, Set
 
 from component_15_logging_config import get_logger
 
@@ -486,3 +486,154 @@ class ConstraintDetector:
             "what",
         ]
         return any(keyword in query_lower for keyword in solution_keywords)
+
+    def detect_numerical_constraints(self, text: str) -> Dict[str, Any]:
+        """
+        Erkennt numerische Constraints in Text (für Zahlen-Rätsel).
+
+        Patterns für:
+        - Teilbarkeit: "teilbar durch X", "Vielfaches von X"
+        - Arithmetik: "Summe der", "Differenz", "Produkt", "Quotient"
+        - Meta-Constraints: "Anzahl der richtigen", "erste/letzte richtige"
+        - Boolean: "richtig", "falsch", "wahr"
+
+        Args:
+            text: Der zu analysierende Text
+
+        Returns:
+            Dictionary mit:
+            - has_numerical_constraints: bool
+            - constraint_types: List[str] - Erkannte Constraint-Typen
+            - numerical_variables: List[str] - Erkannte numerische Variablen
+            - meta_constraints: bool - Ob Meta-Constraints vorhanden sind
+            - confidence: float - Wie sicher ist die Erkennung
+        """
+        text_lower = text.lower()
+
+        # Pattern-Kategorien
+        divisibility_patterns = [
+            r"\bteilbar\s+durch\s+(\d+|die\s+\w+)\b",
+            r"\bvielfaches\s+von\s+(\d+|\w+)\b",
+            r"\brest\s+(\d+)\s+bei\s+teilung\b",
+        ]
+
+        arithmetic_patterns = [
+            r"\bsumme\s+der\s+(\w+)\b",
+            r"\bdifferenz\s+(?:der\s+)?(\w+)\s+und\s+(\w+)\b",
+            r"\bprodukt\s+(?:der\s+)?(\w+)\b",
+            r"\bquotient\s+(?:der\s+)?(\w+)\b",
+        ]
+
+        meta_patterns = [
+            r"\banzahl\s+der\s+(?:richtigen?|falschen?)\s+behauptungen?\b",
+            r"\b(?:erste|letzte|n-te)\s+(?:richtige|falsche)\s+behauptung\b",
+            r"\bnummern?\s+der\s+(?:richtigen?|falschen?)\b",
+            r"\bteiler\b",  # "Anzahl der Teiler"
+        ]
+
+        boolean_patterns = [
+            r"\b(?:ist\s+)?richtig\b",
+            r"\b(?:ist\s+)?falsch\b",
+            r"\b(?:ist\s+)?wahr\b",
+            r"\bbehauptung(?:en)?\b",
+        ]
+
+        # Zähle Matches pro Kategorie
+        divisibility_count = sum(
+            len(re.findall(p, text_lower, re.IGNORECASE)) for p in divisibility_patterns
+        )
+        arithmetic_count = sum(
+            len(re.findall(p, text_lower, re.IGNORECASE)) for p in arithmetic_patterns
+        )
+        meta_count = sum(
+            len(re.findall(p, text_lower, re.IGNORECASE)) for p in meta_patterns
+        )
+        boolean_count = sum(
+            len(re.findall(p, text_lower, re.IGNORECASE)) for p in boolean_patterns
+        )
+
+        # Sammle Constraint-Typen
+        constraint_types = []
+        if divisibility_count > 0:
+            constraint_types.append("DIVISIBILITY")
+        if arithmetic_count > 0:
+            constraint_types.append("ARITHMETIC")
+        if meta_count > 0:
+            constraint_types.append("META")
+        if boolean_count > 0:
+            constraint_types.append("BOOLEAN")
+
+        # Extrahiere numerische Variablen
+        numerical_variables = self._extract_numerical_variables(text)
+
+        # Hat numerische Constraints?
+        # META and BOOLEAN constraints are inherently numerical (truth values, counts)
+        is_meta_or_boolean = "META" in constraint_types or "BOOLEAN" in constraint_types
+        has_numerical = (
+            is_meta_or_boolean  # META/BOOLEAN are always numerical
+            or len(constraint_types) >= 2
+            or (len(constraint_types) >= 1 and len(numerical_variables) >= 1)
+        )
+
+        # Berechne Confidence
+        total_matches = (
+            divisibility_count + arithmetic_count + meta_count + boolean_count
+        )
+        confidence = min(
+            1.0, 0.5 + (total_matches * 0.1) + (len(constraint_types) * 0.1)
+        )
+
+        result = {
+            "has_numerical_constraints": has_numerical,
+            "constraint_types": constraint_types,
+            "numerical_variables": numerical_variables,
+            "meta_constraints": meta_count > 0,
+            "confidence": confidence,
+            "constraint_counts": {
+                "divisibility": divisibility_count,
+                "arithmetic": arithmetic_count,
+                "meta": meta_count,
+                "boolean": boolean_count,
+            },
+        }
+
+        if has_numerical:
+            logger.info(
+                f"[Numerische Constraints erkannt] | "
+                f"types={constraint_types}, variables={len(numerical_variables)}, "
+                f"meta={meta_count > 0}, confidence={confidence:.2f}"
+            )
+
+        return result
+
+    def _extract_numerical_variables(self, text: str) -> List[str]:
+        """
+        Extrahiert numerische Variablen aus Text.
+
+        Heuristiken:
+        - "gesuchte Zahl", "die Zahl"
+        - "X", "Y", "Z" als Variable
+        - "Nummer 1", "Nummer 2", etc.
+        - Numbered statements (1., 2., 3., ...)
+        """
+        variables = []
+        text_lower = text.lower()
+
+        # Heuristik 1: "gesuchte Zahl", "die Zahl"
+        if re.search(r"\b(?:gesuchte|die)\s+zahl\b", text_lower):
+            variables.append("zahl")
+
+        # Heuristik 2: Einzelne Großbuchstaben als Variablen
+        single_vars = re.findall(r"\b([X-Z])\b", text)
+        variables.extend(single_vars)
+
+        # Heuristik 3: "Nummer X"
+        nummern = re.findall(r"\bnummer\s+(\d+)\b", text_lower)
+        variables.extend([f"nummer_{n}" for n in nummern])
+
+        # Heuristik 4: Numbered statements (extract statement IDs)
+        statements = re.findall(r"\b(\d+)\.\s", text)
+        if len(statements) >= 3:  # Mindestens 3 numbered statements
+            variables.extend([f"statement_{s}" for s in statements[:10]])  # Max 10
+
+        return list(set(variables))  # Remove duplicates

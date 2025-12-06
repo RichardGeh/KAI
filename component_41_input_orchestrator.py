@@ -46,6 +46,15 @@ class SegmentType(Enum):
     UNKNOWN = "unknown"  # Unklarer Typ
 
 
+class PuzzleType(Enum):
+    """Typ eines Logic Puzzles (für Solver-Routing)."""
+
+    ENTITY_SAT = "entity_sat"  # Entitäten-basierte Rätsel (Leo/Mark/Nick)
+    NUMERICAL_CSP = "numerical_csp"  # Zahlen-basierte Constraint-Rätsel
+    HYBRID = "hybrid"  # Kombination aus beiden
+    UNKNOWN = "unknown"  # Unbestimmt
+
+
 @dataclass
 class InputSegment:
     """
@@ -173,6 +182,44 @@ class InputOrchestrator:
         )
         return False
 
+    def _is_simple_entity_puzzle(self, segments: List[InputSegment]) -> bool:
+        """
+        Erkennt einfache Entitäten-basierte Rätsel mit repetitiven Fakten.
+
+        Pattern: "A trinkt X. B trinkt Y. C trinkt Z. Wer trinkt X?"
+
+        Args:
+            segments: Liste von klassifizierten Segmenten
+
+        Returns:
+            True wenn es ein einfaches Entitäten-Rätsel ist
+        """
+        # Zähle entity-verb-object Patterns
+        entity_fact_count = 0
+        for seg in segments:
+            if seg.is_explanation():
+                # Pattern: [Großgeschriebener Name] [Verb] [Objekt]
+                if re.match(
+                    r"^[A-Z]\w+\s+(?:trinkt|isst|mag|hat|ist|kauft|nimmt|bestellt)\s+\w+",
+                    seg.text.strip(),
+                ):
+                    entity_fact_count += 1
+
+        # Hat Frage?
+        has_question = any(seg.is_question() for seg in segments)
+
+        # Einfaches Entitäten-Rätsel wenn:
+        # - Mindestens 3 Entity-Fakten (3+ Personen)
+        # - Hat eine Frage
+        is_simple_puzzle = entity_fact_count >= 3 and has_question
+
+        if is_simple_puzzle:
+            logger.info(
+                f"Einfaches Entitäten-Rätsel erkannt: {entity_fact_count} Entity-Fakten"
+            )
+
+        return is_simple_puzzle
+
     def is_logic_puzzle(self, text: str, segments: List[InputSegment]) -> bool:
         """
         Erkennt ob die Eingabe ein Logik-Rätsel ist.
@@ -181,6 +228,8 @@ class InputOrchestrator:
         - Enthält logische Bedingungen (wenn...dann, oder, und, nie beide)
         - Endet mit einer Frage
         - Mehrere Erklärungen vor der Frage
+        - ODER: Einfache repetitive Entity-Fakten + Frage
+        - ODER: Numerisches Constraint-Rätsel
 
         Args:
             text: Der vollständige Eingabetext
@@ -189,7 +238,15 @@ class InputOrchestrator:
         Returns:
             True wenn es ein Logik-Rätsel ist
         """
-        # Logik-Puzzle-Patterns
+        # Prüfe zunächst auf einfache Entitäten-Rätsel
+        if self._is_simple_entity_puzzle(segments):
+            return True
+
+        # Prüfe auf numerisches Rätsel
+        if self._is_numerical_puzzle(text, segments):
+            return True
+
+        # Logik-Puzzle-Patterns (komplexe Rätsel)
         logic_patterns = [
             r"\bwenn\s+.+?,?\s+.+?\b",  # "wenn X, dann Y"
             r"\boder\s+.+?,?\s*aber\s+(?:nie|nicht|niemals)\s+beide",  # XOR
@@ -224,6 +281,130 @@ class InputOrchestrator:
 
         return is_puzzle
 
+    def _is_numerical_puzzle(self, text: str, segments: List[InputSegment]) -> bool:
+        """
+        Erkennt numerische Constraint-Rätsel.
+
+        Pattern: "Gesucht ist eine Zahl..." + mathematische Keywords
+
+        Args:
+            text: Der vollständige Eingabetext
+            segments: Liste von klassifizierten Segmenten
+
+        Returns:
+            True wenn es ein numerisches Rätsel ist
+        """
+        text_lower = text.lower()
+
+        # Pattern: "Gesucht ist/wird eine/die [adj]* Zahl"
+        has_number_search = bool(
+            re.search(
+                r"gesucht\s+(?:ist|wird)\s+(?:eine?|die)\s+(?:\w+\s+)*zahl", text_lower
+            )
+        )
+
+        # Mathematische Keywords (erweitert)
+        has_numerical_keywords = bool(
+            re.search(
+                r"(?:teilbar|summe|ziffer|größer|kleiner|prim|gerade|ungerade|vielfaches|differenz|produkt|quotient|teiler|beträgt|eigenschaften)",
+                text_lower,
+            )
+        )
+
+        # Hat Frage oder "Welche Zahl"-Pattern?
+        has_question = any(seg.is_question() for seg in segments)
+        has_welche_zahl = bool(re.search(r"\bwelche\s+zahl\b", text_lower))
+
+        is_numerical = (
+            has_number_search
+            and has_numerical_keywords
+            and (has_question or has_welche_zahl)
+        )
+
+        if is_numerical:
+            logger.info("Numerisches Constraint-Rätsel erkannt")
+
+        return is_numerical
+
+    def classify_logic_puzzle_type(
+        self, text: str, segments: List[InputSegment]
+    ) -> PuzzleType:
+        """
+        Klassifiziert den Typ eines Logik-Rätsels.
+
+        Unterscheidet zwischen:
+        - ENTITY_SAT: Entitäten-basiert (Leo/Mark/Nick trinkt was)
+        - NUMERICAL_CSP: Zahlen-basiert (gesuchte Zahl, teilbar durch X)
+        - HYBRID: Kombination aus beiden
+        - UNKNOWN: Kein Rätsel oder unbekannt
+
+        Args:
+            text: Der vollständige Eingabetext
+            segments: Liste von klassifizierten Segmenten
+
+        Returns:
+            PuzzleType enum
+        """
+        # Prüfe zunächst auf numerisches Rätsel (spezifischer)
+        if self._is_numerical_puzzle(text, segments):
+            return PuzzleType.NUMERICAL_CSP
+
+        # Prüfe auf einfaches Entity-Rätsel
+        if self._is_simple_entity_puzzle(segments):
+            return PuzzleType.ENTITY_SAT
+
+        text_lower = text.lower()
+
+        # Patterns für numerische/Constraint-basierte Rätsel
+        numerical_patterns = [
+            r"\bzahl\b",  # "gesuchte Zahl", "die Zahl"
+            r"\bteilbar\s+durch\b",  # "teilbar durch X"
+            r"\bvielfaches\s+von\b",  # "Vielfaches von"
+            r"\bsumme\s+der\b",  # "Summe der Nummern"
+            r"\bdifferenz\b",  # "Differenz"
+            r"\bprodukt\b",  # "Produkt"
+            r"\bquotient\b",  # "Quotient"
+            r"\banzahl\s+der\b",  # "Anzahl der Teiler"
+            r"\bteiler\b",  # "Teiler"
+            r"\brichtig(?:e|en)?\s+behauptung(?:en)?\b",  # "richtige Behauptungen"
+            r"\bfalsch(?:e|en)?\s+behauptung(?:en)?\b",  # "falsche Behauptungen"
+            r"\b(?:erste|letzte|n-te)\s+(?:richtig|falsch)\b",  # meta-constraints
+            r"\b\d+\.\s",  # Numbered statements (1., 2., 3., ...)
+        ]
+
+        # Patterns für Entitäten-basierte Rätsel
+        entity_patterns = [
+            r"\b[A-Z][a-z]+\s+(?:trinkt|mag|isst|bestellt)\b",  # "Leo trinkt"
+            r"\b(?:wer|was|welche[rs]?)\s+(?:trinkt|mag|isst|bestellt)\b",  # "Wer/Was trinkt"
+            r"\b(?:einer|eine)\s+von\s+(?:ihnen|den\s+dreien)\b",  # "einer von ihnen"
+        ]
+
+        # Zähle Matches
+        numerical_count = sum(
+            len(re.findall(p, text_lower, re.IGNORECASE)) for p in numerical_patterns
+        )
+        entity_count = sum(
+            len(re.findall(p, text_lower, re.IGNORECASE)) for p in entity_patterns
+        )
+
+        # Klassifikation basierend auf Matches
+        if numerical_count >= 2 and entity_count == 0:
+            logger.info(
+                f"Puzzle-Typ: NUMERICAL_CSP ({numerical_count} numerische Patterns)"
+            )
+            return PuzzleType.NUMERICAL_CSP
+        elif entity_count >= 2 and numerical_count == 0:
+            logger.info(f"Puzzle-Typ: ENTITY_SAT ({entity_count} Entitäts-Patterns)")
+            return PuzzleType.ENTITY_SAT
+        elif numerical_count >= 1 and entity_count >= 1:
+            logger.info(
+                f"Puzzle-Typ: HYBRID ({numerical_count} numerisch, {entity_count} Entitäten)"
+            )
+            return PuzzleType.HYBRID
+        else:
+            logger.debug("Puzzle-Typ: UNKNOWN (nicht genug Patterns)")
+            return PuzzleType.UNKNOWN
+
     def orchestrate_input(self, text: str) -> Optional[Dict[str, Any]]:
         """
         Orchestriert eine komplexe Eingabe.
@@ -247,22 +428,29 @@ class InputOrchestrator:
         # Prüfe ob es ein Logik-Rätsel ist
         is_puzzle = self.is_logic_puzzle(text, segments)
 
+        # Klassifiziere Puzzle-Typ (falls Rätsel erkannt)
+        puzzle_type = PuzzleType.UNKNOWN
+        if is_puzzle:
+            puzzle_type = self.classify_logic_puzzle_type(text, segments)
+
         # Erstelle orchestrierten Plan
         plan = self._create_orchestrated_plan(segments)
 
         logger.info(
             f"Orchestrierung abgeschlossen: {len(segments)} Segmente verarbeitet"
-            + (", Logik-Rätsel erkannt" if is_puzzle else "")
+            + (f", Logik-Rätsel erkannt ({puzzle_type.value})" if is_puzzle else "")
         )
 
         return {
             "segments": segments,
             "plan": plan,
             "is_logic_puzzle": is_puzzle,
+            "puzzle_type": puzzle_type,
             "metadata": {
                 "explanation_count": sum(s.is_explanation() for s in segments),
                 "question_count": sum(s.is_question() for s in segments),
                 "total_segments": len(segments),
+                "puzzle_classification": puzzle_type.value if is_puzzle else None,
             },
         }
 

@@ -164,6 +164,26 @@ class KonzeptNetzwerk:
         """Get normalized word frequency (0.0 - 1.0) using sigmoid."""
         return self._core.get_normalized_word_frequency(word)
 
+    def query_semantic_neighbors(
+        self,
+        lemma: str,
+        allowed_relations: Optional[List[str]] = None,
+        min_confidence: float = 0.0,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        """Bidirectional neighbor search."""
+        return self._core.query_semantic_neighbors(
+            lemma, allowed_relations, min_confidence, limit
+        )
+
+    def query_transitive_path(
+        self, subject: str, predicate: str, object_node: str, max_hops: int = 3
+    ) -> Optional[List[Dict[str, Any]]]:
+        """Multi-hop path finding."""
+        return self._core.query_transitive_path(
+            subject, predicate, object_node, max_hops
+        )
+
     # ========== PATTERN METHODS ==========
     # Delegate to KonzeptNetzwerkPatterns
 

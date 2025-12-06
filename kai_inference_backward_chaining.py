@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 # Import Unified Proof Explanation System
 try:
-    from component_17_proof_explanation import create_proof_tree_from_logic_engine
+    from component_9_logik_engine_proof import create_proof_tree_from_logic_engine
 
     PROOF_SYSTEM_AVAILABLE = True
 except ImportError:

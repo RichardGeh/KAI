@@ -95,12 +95,11 @@ class StrategyDispatcher:
 
         # Import unified proof system
         try:
-            from component_17_proof_explanation import ProofStep as UnifiedProofStep
-            from component_17_proof_explanation import (
-                ProofTree,
-                StepType,
+            from component_9_logik_engine_proof import (
                 create_proof_tree_from_logic_engine,
             )
+            from component_17_proof_explanation import ProofStep as UnifiedProofStep
+            from component_17_proof_explanation import ProofTree, StepType
 
             self.ProofTree = ProofTree
             self.UnifiedProofStep = UnifiedProofStep
@@ -282,7 +281,12 @@ class StrategyDispatcher:
         return results
 
     def execute_single_strategy(
-        self, topic: str, relation_type: str, strategy
+        self,
+        topic: str,
+        relation_type: str,
+        strategy,
+        query_text: str = None,
+        context: Optional[Dict[str, Any]] = None,
     ) -> Optional:
         """
         Execute a single reasoning strategy.
@@ -291,6 +295,8 @@ class StrategyDispatcher:
             topic: Topic to reason about
             relation_type: Relation type
             strategy: ReasoningStrategy enum to execute
+            query_text: Optional full query text (for logic puzzles)
+            context: Optional context dict (for working memory lookup)
 
         Returns:
             ReasoningResult or None
@@ -312,6 +318,14 @@ class StrategyDispatcher:
                 result = self._try_spatial_reasoning(topic, relation_type)
             elif strategy == self.ReasoningStrategy.RESONANCE:
                 result = self._try_resonance(topic, relation_type)
+            elif strategy == self.ReasoningStrategy.LOGIC_PUZZLE:
+                # Logic puzzle requires full query text
+                if query_text:
+                    result = self._try_logic_puzzle_solving(
+                        query_text, topic, relation_type, context
+                    )
+                else:
+                    logger.warning("[Logic Puzzle] Skipped - no query_text provided")
 
             return result
 
@@ -788,7 +802,9 @@ class StrategyDispatcher:
             logger.warning(f"[Abductive] Fehler: {e}")
             return None
 
-    def _try_spatial_reasoning(self, topic: str, relation_type: str = None) -> Optional:
+    def _try_spatial_reasoning(
+        self, topic: str, relation_type: str = None, obj: str = None
+    ) -> Optional:
         """
         Spatial reasoning using SpatialReasoner.
         """
@@ -798,9 +814,22 @@ class StrategyDispatcher:
         logger.debug(f"[Spatial Reasoning] Topic: {topic}")
 
         try:
+            # Convert string relation_type to SpatialRelationType enum if needed
+            spatial_relation = None
+            if relation_type:
+                try:
+                    from component_42_spatial_inference import SpatialRelationType
+
+                    spatial_relation = SpatialRelationType(relation_type)
+                except (ValueError, ImportError):
+                    logger.debug(
+                        f"[Spatial Reasoning] Could not convert '{relation_type}' to SpatialRelationType"
+                    )
+                    spatial_relation = None
+
             # Use spatial reasoner to infer spatial relations
             result = self.spatial_reasoner.infer_spatial_relations(
-                subject=topic, relation_type=relation_type
+                entity_name=topic, relation_type=spatial_relation, target_entity=obj
             )
 
             if result and result.success:
@@ -826,11 +855,14 @@ class StrategyDispatcher:
                     for rel_type, targets in result.relations.items():
                         for target in targets:
                             step = self.UnifiedProofStep(
+                                step_id=f"spatial_{topic}_{rel_type}_{target}",
                                 step_type=self.StepType.QUERY,
-                                description=f"{topic} {rel_type} {target}",
+                                inputs=[topic],
+                                output=f"{topic} {rel_type} {target}",
                                 confidence=result.confidence,
+                                explanation_text=f"Raeumliche Relation: {topic} {rel_type} {target}",
+                                source_component="spatial_reasoning",
                                 metadata={
-                                    "source": "spatial_reasoning",
                                     "relation": rel_type,
                                 },
                             )
@@ -922,11 +954,14 @@ class StrategyDispatcher:
                     # Add solution steps
                     for var_name, value in solution.items():
                         step = self.UnifiedProofStep(
+                            step_id=f"constraint_{var_name}_{value}",
                             step_type=self.StepType.QUERY,
-                            description=f"{var_name} = {value}",
+                            inputs=[topic],
+                            output=f"{var_name} = {value}",
                             confidence=constraint_problem.confidence,
+                            explanation_text=f"Constraint-Loesung: {var_name} = {value}",
+                            source_component="constraint_solving",
                             metadata={
-                                "source": "constraint_solving",
                                 "csp_variables": len(solution),
                             },
                         )
@@ -952,6 +987,218 @@ class StrategyDispatcher:
         except Exception as e:
             logger.warning(f"[Constraint Solving] Fehler: {e}")
             return None
+
+    def _try_logic_puzzle_solving(
+        self,
+        query_text: str,
+        topic: str,
+        relation_type: str = None,
+        context: Optional[Dict[str, Any]] = None,
+    ) -> Optional:
+        """
+        Try solving as logic puzzle (entity-based SAT or numerical CSP).
+
+        Detects puzzle type and routes to appropriate solver:
+        - ENTITY_SAT: Leo/Mark/Nick puzzles -> SAT solver
+        - NUMERICAL_CSP: "gesuchte Zahl" puzzles -> CSP solver
+
+        PHASE 4: Enhanced with working memory context detection for orchestrated puzzles.
+
+        Args:
+            query_text: Full query text
+            topic: Extracted topic/subject
+            relation_type: Optional relation type
+            context: Optional context dict (for working memory lookup)
+
+        Returns:
+            ReasoningResult or None
+        """
+        logger.info(f"[Logic Puzzle] Attempting to solve: '{query_text[:60]}...'")
+
+        # Lazy load solver
+        if not hasattr(self, "logic_puzzle_solver"):
+            from component_45_logic_puzzle_solver_core import LogicPuzzleSolver
+
+            self.logic_puzzle_solver = LogicPuzzleSolver()
+
+        try:
+            # STEP 1: Check working memory for orchestrated puzzle context
+            # This is set by OrchestratedStrategy when it detects a logic puzzle
+            puzzle_context = None
+            reasoning_states = self.working_memory.get_reasoning_trace()
+
+            for state in reversed(reasoning_states):  # Most recent first
+                if state.step_type == "orchestrated_logic_puzzle":
+                    puzzle_context = state.data
+                    logger.info(
+                        f"[Logic Puzzle] Found orchestrated context: {puzzle_context.get('puzzle_classification', 'UNKNOWN')}"
+                    )
+                    break
+
+            # STEP 2: Determine puzzle text and entities
+            if puzzle_context:
+                # Use full puzzle text from orchestrated context
+                full_puzzle_text = puzzle_context.get("full_text", query_text)
+                entities = puzzle_context.get("entities", [])
+                puzzle_classification = puzzle_context.get(
+                    "puzzle_classification", "UNKNOWN"
+                )
+
+                logger.debug(
+                    f"[Logic Puzzle] Using orchestrated puzzle: {len(full_puzzle_text)} chars, {len(entities)} entities"
+                )
+            else:
+                # Fallback: Use query_text directly
+                full_puzzle_text = query_text
+                entities = self._extract_entities_from_query(query_text)
+                puzzle_classification = "UNKNOWN"
+
+                logger.debug(f"[Logic Puzzle] No orchestration context - direct solve")
+
+            # STEP 3: Solve puzzle with automatic type routing
+            solution = self.logic_puzzle_solver.solve(
+                conditions_text=full_puzzle_text,
+                entities=entities,
+                question=query_text,  # Keep original question for answer formatting
+            )
+
+            if not solution or solution.get("result") != "SATISFIABLE":
+                logger.info("[Logic Puzzle] No satisfiable solution found")
+                return None
+
+            # STEP 4: Extract solution details
+            puzzle_type = solution.get("puzzle_type", "UNKNOWN")
+            model = solution.get("solution", {})
+            answer_text = solution.get("answer", "")
+            confidence = solution.get("confidence", 0.70)
+
+            logger.info(
+                f"[Logic Puzzle] [OK] Solution found: type={puzzle_type}, vars={len(model)}, conf={confidence:.2f}"
+            )
+
+            # STEP 5: Build proof tree
+            proof_tree = solution.get("proof_tree")  # May already exist from solver
+
+            if not proof_tree and self.PROOF_SYSTEM_AVAILABLE:
+                proof_tree = self.ProofTree(query=query_text)
+
+                # Add puzzle detection step
+                proof_tree.add_root_step(
+                    self.UnifiedProofStep(
+                        step_id="puzzle_detection",
+                        step_type=self.StepType.QUERY,
+                        inputs=[full_puzzle_text[:100]],
+                        output=f"Erkannt als {puzzle_type} Puzzle",
+                        confidence=0.85,
+                        explanation_text=f"Puzzle-Typ: {puzzle_type}",
+                        source_component="logic_puzzle_solver",
+                        metadata={
+                            "puzzle_type": puzzle_type,
+                            "orchestrated": puzzle_context is not None,
+                        },
+                    )
+                )
+
+                # Add solution steps
+                for var_name, value in list(model.items())[
+                    :10
+                ]:  # Limit to 10 vars for proof tree
+                    proof_tree.add_root_step(
+                        self.UnifiedProofStep(
+                            step_id=f"puzzle_solution_{var_name}",
+                            step_type=self.StepType.INFERENCE,
+                            inputs=[var_name],
+                            output=f"{var_name} = {value}",
+                            confidence=confidence,
+                            explanation_text=f"Geloeste Variable: {var_name} = {value}",
+                            source_component="logic_puzzle_solver",
+                        )
+                    )
+
+            # STEP 6: Track in working memory
+            self.working_memory.add_reasoning_state(
+                step_type="logic_puzzle_solved",
+                description=f"Logik-Raetsel geloest: {puzzle_type}, {len(model)} Variablen",
+                data={
+                    "solution": model,
+                    "puzzle_type": puzzle_type,
+                    "confidence": confidence,
+                    "answer": answer_text,
+                    "orchestrated": puzzle_context is not None,
+                },
+                confidence=confidence,
+            )
+
+            # STEP 7: Format inferred facts
+            inferred_facts = {
+                "PUZZLE_SOLUTION": [answer_text] if answer_text else [str(model)]
+            }
+
+            # STEP 8: Create reasoning result
+            return self.ReasoningResult(
+                strategy=self.ReasoningStrategy.LOGIC_PUZZLE,
+                success=True,
+                confidence=confidence,
+                inferred_facts=inferred_facts,
+                proof_tree=proof_tree,
+                proof_trace=f"Logik-Raetsel geloest ({puzzle_type}): {answer_text}",
+                metadata={
+                    "puzzle_type": puzzle_type,
+                    "num_variables": len(model),
+                    "answer": answer_text,
+                    "orchestrated": puzzle_context is not None,
+                    "puzzle_classification": puzzle_classification,
+                },
+            )
+
+        except Exception as e:
+            logger.error(f"[Logic Puzzle Solving] Fehler: {e}", exc_info=True)
+            return None
+
+    def _extract_entities_from_query(self, query_text: str) -> List[str]:
+        """
+        Extract named entities from query text for logic puzzles.
+
+        Args:
+            query_text: The query text
+
+        Returns:
+            List of entity names (e.g., ["Leo", "Mark", "Nick"])
+        """
+        try:
+            import re
+
+            # Simple pattern: capitalized words that are likely names
+            # Pattern: Word starting with capital letter, not at sentence start
+            words = query_text.split()
+            entities = []
+
+            for i, word in enumerate(words):
+                # Skip first word (might be capitalized question word)
+                if i == 0:
+                    continue
+                # Check if capitalized and not common German words
+                if word[0].isupper() and word not in [
+                    "Der",
+                    "Die",
+                    "Das",
+                    "Ein",
+                    "Eine",
+                    "Einen",
+                ]:
+                    # Remove punctuation
+                    clean_word = re.sub(r"[^\w]", "", word)
+                    if clean_word and clean_word not in entities:
+                        entities.append(clean_word)
+
+            logger.debug(
+                f"[Entity Extraction] Found {len(entities)} entities: {entities}"
+            )
+            return entities
+
+        except Exception as e:
+            logger.warning(f"[Entity Extraction] Fehler: {e}")
+            return []
 
     def _try_resonance(self, topic: str, relation_type: str = None) -> Optional:
         """

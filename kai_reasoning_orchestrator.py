@@ -57,6 +57,7 @@ class ReasoningStrategy(Enum):
     SPATIAL = "spatial"  # Spatial reasoning (grids, shapes, positions)
     RESONANCE = "resonance"  # Spreading activation with resonance amplification
     CONSTRAINT = "constraint"  # Constraint satisfaction (logic puzzles, CSP)
+    LOGIC_PUZZLE = "logic_puzzle"  # Logic puzzle solving (SAT + numerical CSP)
 
 
 @dataclass

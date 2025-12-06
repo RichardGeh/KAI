@@ -333,6 +333,8 @@ class OrchestratedStrategy(SubGoalStrategy):
         """
         Beantwortet eine Frage mit zuvor gelerntem Kontext.
 
+        PHASE 4: Enhanced to detect logic puzzles and store context in working memory.
+
         Args:
             sub_goal: SubGoal mit segment_text in metadata
             context: Kontext mit facts_learned aus vorherigen Sub-Goals
@@ -350,6 +352,78 @@ class OrchestratedStrategy(SubGoalStrategy):
             f"Beantworte Frage mit Kontext: '{segment_text[:50]}...' "
             f"(Kontext gelernt: {has_learned_context})"
         )
+
+        # PHASE 4: Check if this is a logic puzzle orchestration result
+        # If so, store puzzle context in working memory for dispatcher
+        orchestration_result = context.get("orchestration_result")
+
+        if orchestration_result and orchestration_result.get("is_logic_puzzle"):
+            puzzle_type = orchestration_result.get("puzzle_type", "UNKNOWN")
+            puzzle_metadata = orchestration_result.get("metadata", {})
+
+            logger.info(
+                f"[Logic Puzzle Orchestration] Detected: {puzzle_type.value if hasattr(puzzle_type, 'value') else puzzle_type}"
+            )
+
+            # Extract entities from segments
+            segments = orchestration_result.get("segments", [])
+            entities = []
+            for seg in segments:
+                if seg.is_explanation():
+                    # Extract capitalized words (likely entities like "Leo", "Mark", "Nick")
+                    import re
+
+                    words = re.findall(r"\b[A-Z][a-z]+\b", seg.text)
+                    entities.extend(
+                        [
+                            w
+                            for w in words
+                            if w not in ["Der", "Die", "Das", "Ein", "Eine"]
+                        ]
+                    )
+
+            # Remove duplicates while preserving order
+            entities = list(dict.fromkeys(entities))
+
+            # Reconstruct full puzzle text (all segments)
+            full_puzzle_text = " ".join(seg.text for seg in segments)
+
+            # Store puzzle context in working memory for dispatcher
+            self.worker.working_memory.add_reasoning_state(
+                step_type="orchestrated_logic_puzzle",
+                description=f"Logik-Raetsel orchestriert: {puzzle_metadata.get('puzzle_classification', 'UNKNOWN')}",
+                data={
+                    "full_text": full_puzzle_text,
+                    "question": segment_text,
+                    "entities": entities,
+                    "puzzle_classification": puzzle_metadata.get(
+                        "puzzle_classification", "UNKNOWN"
+                    ),
+                    "segment_count": puzzle_metadata.get("total_segments", 0),
+                    "explanation_count": puzzle_metadata.get("explanation_count", 0),
+                    "question_count": puzzle_metadata.get("question_count", 0),
+                },
+                confidence=0.85,
+            )
+
+            logger.debug(
+                f"[Logic Puzzle Orchestration] Stored context: {len(entities)} entities, "
+                f"{len(full_puzzle_text)} chars full text"
+            )
+
+            # Add LOGIC_PUZZLE strategy hint for dispatcher
+            # This will be picked up by the reasoning orchestrator
+            if "strategies" not in context:
+                context["strategies"] = []
+
+            # Import strategy enum
+            from kai_reasoning_orchestrator import ReasoningStrategy
+
+            if ReasoningStrategy.LOGIC_PUZZLE not in context["strategies"]:
+                context["strategies"].append(ReasoningStrategy.LOGIC_PUZZLE)
+                logger.info(
+                    "[Logic Puzzle Orchestration] Added LOGIC_PUZZLE strategy to context"
+                )
 
         # Verarbeite Frage durch normale Pipeline
         # WICHTIG: Diese Frage wird mit dem ZUVOR GELERNTEN Kontext beantwortet
@@ -394,6 +468,19 @@ class OrchestratedStrategy(SubGoalStrategy):
         success, result = question_strategy._formulate_answer(intent, question_context)
         if not success:
             return success, result
+
+        # PHASE 4: Boost confidence for logic puzzle answers
+        if orchestration_result and orchestration_result.get("is_logic_puzzle"):
+            # Apply puzzle-specific confidence boost
+            if "final_response" in result and result["final_response"]:
+                # Check if answer is not a knowledge gap message
+                if "Ich weiß nicht" not in result["final_response"]:
+                    original_confidence = question_context.get("confidence", 0.5)
+                    boosted_confidence = min(original_confidence + 0.20, 0.95)
+                    logger.info(
+                        f"[Logic Puzzle Orchestration] Confidence boost: {original_confidence:.2f} -> {boosted_confidence:.2f}"
+                    )
+                    result["confidence"] = boosted_confidence
 
         logger.info(
             "Frage erfolgreich beantwortet (mit Kontext: %s)", has_learned_context
